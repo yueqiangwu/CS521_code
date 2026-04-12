@@ -18,6 +18,7 @@ A simple Bitcoin Script Interpreter based on Python
 bitcoin_script_interpreter/
 ├── src/
 │   ├── __init__.py
+│   ├── common.py          # Useful definitions
 │   ├── engine.py          # Core Virtual Machine (VM) logic
 │   ├── opcodes.py         # Definitions for all opcode functions
 │   ├── parser.py          # Script parser: Converts hexadecimal to a list of instructions

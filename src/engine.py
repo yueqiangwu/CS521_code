@@ -1,4 +1,4 @@
-from opcodes_map import OPCODES_MAP
+from common import VM_FALSE, OPCODES_MAP
 from script import Script
 
 
@@ -51,4 +51,4 @@ class BircoinScriptInterpreter:
             return False
 
         res = self.top()
-        return res != b"" and res != b"\x00"
+        return res != b"" and res != VM_FALSE
