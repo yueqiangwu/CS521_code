@@ -41,3 +41,5 @@ bitcoin_script_interpreter/
 2. Install dependencies `pip install -r requirements.txt`
 
 3. Run `python3 main.py`
+
+4. Run tests `pytest -s tests/`

@@ -1,4 +1,5 @@
-from common import VM_FALSE, OPCODES_MAP
+from common import VM_FALSE
+from opcodes import OPCODES_MAP
 from script import Script
 
 

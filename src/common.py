@@ -6,20 +6,9 @@ OP_OPCODE_MAP: dict[str, int] = {
     "OP_CHECKSIG": 0xAC,
 }
 
-def op_2_opcode(op: str):
+
+def op_2_opcode(op: str) -> int | None:
     return OP_OPCODE_MAP.get(op.upper())
-
-
-OPCODES_MAP: dict[int, function] = {}
-
-
-def opcode():
-    def decorator(func):
-        opcode = op_2_opcode(func.__name__)
-        OPCODES_MAP[opcode] = func
-        return func
-
-    return decorator
 
 
 VM_TRUE = b"\x01"

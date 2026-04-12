@@ -1,7 +1,7 @@
-from src.common import op_2_opcode, VMError
-from src.crypto import hash160
-from src.engine import BircoinScriptInterpreter
-from src.script import Script
+from common import op_2_opcode, VMError
+from crypto import hash160
+from engine import BircoinScriptInterpreter
+from script import Script
 
 
 OP_DUP = op_2_opcode("OP_DUP")
