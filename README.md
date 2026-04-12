@@ -18,17 +18,19 @@ A simple Bitcoin Script Interpreter based on Python
 bitcoin_script_interpreter/
 ├── src/
 │   ├── __init__.py
+│   ├── common.py          # Useful definitions
 │   ├── engine.py          # Core Virtual Machine (VM) logic
 │   ├── opcodes.py         # Definitions for all opcode functions
 │   ├── parser.py          # Script parser: Converts hexadecimal to a list of instructions
 │   ├── crypto.py          # Cryptographic helper functions (Hash160, ECDSA verification)
-│   └── script.py          # Script object encapsulation (ScriptSig + ScriptPubKey)
+│   ├── script.py          # Script object encapsulation (ScriptSig + ScriptPubKey)
+│   ├── main.py            # Project entry point: Demonstrates the execution process
+│   └── ui.py              # Simple user interface
 ├── tests/
 │   ├── __init__.py
 │   ├── test_p2pkh.py      # P2PKH test cases
 │   ├── test_p2sh.py       # P2SH test cases
 │   └── test_multisig.py   # Multisig test cases
-├── main.py                # Project entry point: Demonstrates the execution process
 ├── requirements.txt       # Dependencies (ecdsa, hashlib, etc.)
 └── README.md
 ```
@@ -39,4 +41,6 @@ bitcoin_script_interpreter/
 
 2. Install dependencies `pip install -r requirements.txt`
 
-3. Run `python3 main.py`
+3. Run `python3 src/main.py`
+
+4. Run all tests `pytest -s tests/`
