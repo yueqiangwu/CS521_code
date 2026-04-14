@@ -61,3 +61,4 @@ def op_checksig(vm: "BircoinScriptInterpreter"):
         vm.push(VM_TRUE)
     else:
         vm.push(VM_FALSE)
+

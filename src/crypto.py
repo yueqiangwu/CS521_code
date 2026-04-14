@@ -9,6 +9,8 @@ def hash160(data: bytes) -> bytes:
     h.update(sha2)
     return h.digest()
 
+def sha256(data: bytes) -> bytes:
+    return hashlib.sha256(data).digest()   
 
 def verify_sig(pubkey: bytes, sig: bytes, msg_hash: bytes) -> bool:
     try:
