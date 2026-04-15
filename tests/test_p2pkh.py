@@ -1,6 +1,6 @@
 from src.common import op_2_opcode, VMError
 from src.crypto import hash160
-from src.engine import BircoinScriptInterpreter
+from src.engine import BitcoinScriptInterpreter
 from src.script import Script
 
 
@@ -31,7 +31,7 @@ def test_p2pkh_success():
     script = Script(full_cmds)
 
     # Execute script
-    vm = BircoinScriptInterpreter(script, tx_sig_hash=dummy_tx_hash)
+    vm = BitcoinScriptInterpreter(script, tx_sig_hash=dummy_tx_hash)
     try:
         is_valid = vm.execute()
         print(f"Result: {is_valid}")

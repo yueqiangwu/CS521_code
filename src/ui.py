@@ -1,7 +1,7 @@
 import tkinter as tk
 
 from common import opcode_2_op, VMError
-from engine import BircoinScriptInterpreter
+from engine import BitcoinScriptInterpreter
 from script import Script
 
 
@@ -46,7 +46,7 @@ class InterpreterUI:
             full_script = f"{sig} {pub}"
             script = Script.parse(full_script)
 
-            self.vm = BircoinScriptInterpreter(script)
+            self.vm = BitcoinScriptInterpreter(script)
             self.log("VM initialized.\n")
         except Exception as e:
             self.log(f"Initialzing error: {str(e)}")
