@@ -3,14 +3,10 @@ import hashlib
 from common import opcode_2_op, VMError, VM_FALSE
 from opcodes import OPCODES_MAP
 from script import Script
+from crypto import hash160, verify_sig
 
 class RuntimeError(Exception):
     pass
-
-def hash160(data: bytes) -> bytes:
-    h = hashlib.new('ripemd160')
-    h.update(hashlib.sha256(data).digest())
-    return h.digest()
 
 class BitcoinScriptInterpreter:
     def __init__(
