@@ -42,7 +42,7 @@ class BitcoinScriptInterpreter:
         self, script: Script, initial_stack: list | None = None, tx_sig_hash=None, witness: list | None = None
     ):
         self.script = script
-        self.stack = Stack(initial_stack)
+        self.stack = self.stack = initial_stack or []
         self.witness = witness or []
 
         self.tx_sig_hash = tx_sig_hash
@@ -51,13 +51,17 @@ class BitcoinScriptInterpreter:
         self.terminated = False
 
     def push(self, item: bytes):
-        self.stack.push(item)
+        self.stack.append(item)
 
-    def pop(self) -> bytes:
+    def pop(self):
+        if len(self.stack) < 1:
+            raise RuntimeError("Stack underflow")
         return self.stack.pop()
 
-    def top(self) -> bytes:
-        return self.stack.top()
+    def top(self):
+        if len(self.stack) < 1:
+            raise RuntimeError("Empty stack")
+        return self.stack[-1]
 
     def step(self):
         if self.terminated:
@@ -108,7 +112,7 @@ class BitcoinScriptInterpreter:
     # ==========================================
     
     def is_witness_program(self) -> bool:
-        """检查 scriptPubKey 是否匹配 SegWit 的模式: 0x00 + 20字节/32字节"""
+        """Check if the scriptPubKey matches the SegWit pattern: 0x00 + 20 bytes/32 bytes"""
         cmds = self.script.cmds
         if len(cmds) == 2 and cmds[0] == 0x00 and isinstance(cmds[1], bytes):
             if len(cmds[1]) == 20 or len(cmds[1]) == 32:
