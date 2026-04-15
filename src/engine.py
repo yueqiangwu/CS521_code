@@ -1,36 +1,11 @@
 import logging
-
-class RuntimeError(Exception):
-    pass
-
-class Stack:
-    def __init__(self, initial_stack: list | None = None):
-        self._elements = initial_stack.copy() if initial_stack else []
-
-    def push(self, item: bytes):
-        self._elements.append(item)
-
-    def pop(self) -> bytes:
-        if len(self._elements) < 1:
-            raise RuntimeError("Stack underflow")
-        return self._elements.pop()
-
-    def top(self) -> bytes:
-        if len(self._elements) < 1:
-            raise RuntimeError("Empty stack")
-        return self._elements[-1]
-
-    def __len__(self):
-        return len(self._elements)
-
-    def get_elements(self) -> list:
-        return self._elements
-    
-
 import hashlib
 from common import opcode_2_op, VMError, VM_FALSE
 from opcodes import OPCODES_MAP
 from script import Script
+
+class RuntimeError(Exception):
+    pass
 
 def hash160(data: bytes) -> bytes:
     h = hashlib.new('ripemd160')
