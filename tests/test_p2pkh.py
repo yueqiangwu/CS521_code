@@ -1,13 +1,7 @@
-from src.common import op_2_opcode, VMError
+from src.common import VMError
 from src.crypto import hash160
 from src.engine import BitcoinScriptInterpreter
 from src.script import Script
-
-
-OP_DUP = op_2_opcode("OP_DUP")
-OP_HASH160 = op_2_opcode("OP_HASH160")
-OP_EQUALVERIFY = op_2_opcode("OP_EQUALVERIFY")
-OP_CHECKSIG = op_2_opcode("OP_CHECKSIG")
 
 
 def test_p2pkh_success():
@@ -19,15 +13,7 @@ def test_p2pkh_success():
 
     # Build script (Unlocking + Locking)
     # P2PKH: <sig> <pubkey> OP_DUP OP_HASH160 <pubkey_hash> OP_EQUALVERIFY OP_CHECKSIG
-    full_cmds = [
-        sig,
-        pubkey,
-        OP_DUP,
-        OP_HASH160,
-        pubkey_hash,
-        OP_EQUALVERIFY,
-        OP_CHECKSIG,
-    ]
+    full_cmds = f"<{sig}> <{pubkey}> OP_DUP OP_HASH160 <f{pubkey_hash}> OP_EQUALVERIFY OP_CHECKSIG"
     script = Script(full_cmds)
 
     # Execute script
