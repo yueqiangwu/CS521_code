@@ -1,24 +1,22 @@
-import logging
 import hashlib
-from common import opcode_2_op, VMError, VM_FALSE, op_2_opcode
-from opcodes import OPCODES_MAP
-from script import Script
+import logging
+
+from common import VMError, VM_FALSE
 from crypto import hash160, verify_sig
+from opcodes import opcode_2_op, OPCODE_FUNC_MAP
+from script import Script
 
-OP_DUP = op_2_opcode("OP_DUP")
-OP_HASH160 = op_2_opcode("OP_HASH160")
-OP_EQUALVERIFY = op_2_opcode("OP_EQUALVERIFY")
-OP_CHECKSIG = op_2_opcode("OP_CHECKSIG")
-
-class RuntimeError(Exception):
-    pass
 
 class BitcoinScriptInterpreter:
     def __init__(
-        self, script: Script, initial_stack: list | None = None, tx_sig_hash=None, witness: list | None = None
+        self,
+        script: Script,
+        initial_stack: list | None = None,
+        tx_sig_hash=None,
+        witness: list | None = None,
     ):
         self.script = script
-        self.stack = self.stack = initial_stack or []
+        self.stack = initial_stack or []
         self.witness = witness or []
 
         self.tx_sig_hash = tx_sig_hash
@@ -55,10 +53,8 @@ class BitcoinScriptInterpreter:
 
         if isinstance(cmd, bytes):
             self.push(cmd)
-        elif cmd in OPCODES_MAP.keys():
-            func = OPCODES_MAP.get(cmd)
-            if func is None:
-                raise RuntimeError("Invalid opcode")
+        elif cmd in OPCODE_FUNC_MAP.keys():
+            func = OPCODE_FUNC_MAP[cmd]
             try:
                 func(self)
             except VMError as e:
@@ -76,17 +72,13 @@ class BitcoinScriptInterpreter:
     def is_valid(self) -> bool:
         if not self.terminated and len(self.stack) == 0:
             return False
-        
+
         if len(self.stack) == 0:
             return False
 
         res = self.top()
         return res != b"" and res != VM_FALSE
 
-    # ==========================================
-    # SegWit 
-    # ==========================================
-    
     def is_witness_program(self) -> bool:
         """Check if the scriptPubKey matches the SegWit pattern: 0x00 + 20 bytes/32 bytes"""
         cmds = self.script.cmds
@@ -111,11 +103,13 @@ class BitcoinScriptInterpreter:
 
     def _execute_p2wpkh(self, pubkey_hash: bytes) -> bool:
         if len(self.witness) != 2:
-            raise VMError("P2WPKH requires exactly 2 items in witness (signature, pubkey)")
+            raise VMError(
+                "P2WPKH requires exactly 2 items in witness (signature, pubkey)"
+            )
 
         sig, pubkey = self.witness[0], self.witness[1]
 
-        # Check pubkey hash matches the one in scriptPubKey 
+        # Check pubkey hash matches the one in scriptPubKey
         if hash160(pubkey) != pubkey_hash:
             raise VMError("P2WPKH pubkey hash mismatch")
 
@@ -127,7 +121,7 @@ class BitcoinScriptInterpreter:
         ]
         inner_script = Script(p2pkh_cmds)
         inner_vm = BitcoinScriptInterpreter(inner_script, tx_sig_hash=self.tx_sig_hash)
-        
+
         while not inner_vm.terminated:
             inner_vm.step()
 
@@ -147,18 +141,12 @@ class BitcoinScriptInterpreter:
         # Execute the witness script in a new VM instance, with the args as the initial stack
         inner_script = Script.parse(witness_script_bytes)
         inner_vm = BitcoinScriptInterpreter(
-            inner_script, 
-            initial_stack=args, 
-            tx_sig_hash=self.tx_sig_hash
+            inner_script, initial_stack=args, tx_sig_hash=self.tx_sig_hash
         )
-        
+
         while not inner_vm.terminated:
             inner_vm.step()
         return inner_vm.is_valid()
-
-    # ==========================================
-    # Main Execution Logic
-    # ==========================================
 
     def execute(self) -> bool:
         # 2. Check if it's a SegWit transaction by inspecting the scriptPubKey pattern
@@ -170,7 +158,7 @@ class BitcoinScriptInterpreter:
             
             return is_valid
 
-        # Traditional Legacy 
+        # Traditional Legacy
         while not self.terminated:
             self.step()
         
@@ -181,7 +169,9 @@ class BitcoinScriptInterpreter:
         logging.info("\nP2SH Pattern Detected! Initializing Inner VM...")
         inner_script = Script.parse(redeem_script_bytes)
         # Get the current stack elements to pass as initial stack for the inner VM
-        inner_vm = BitcoinScriptInterpreter(inner_script, vm.stack.get_elements().copy(), tx_sig_hash)
+        inner_vm = BitcoinScriptInterpreter(
+            inner_script, vm.stack.get_elements().copy(), tx_sig_hash
+        )
         while not inner_vm.terminated:
             inner_vm.step()
         return inner_vm.is_valid()
