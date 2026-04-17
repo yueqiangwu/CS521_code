@@ -115,12 +115,16 @@ class BitcoinScriptInterpreter:
 
         # Construct the equivalent P2PKH script: <sig> <pubkey> OP_DUP OP_HASH160 <pubkey_hash> OP_EQUALVERIFY OP_CHECKSIG
         # 0x76: OP_DUP, 0xa9: OP_HASH160, 0x88: OP_EQUALVERIFY, 0xac: OP_CHECKSIG
-        p2pkh_cmds = [sig, pubkey, 0x76, 0xA9, pubkey_hash, 0x88, 0xAC]
+        p2pkh_cmds = [
+            sig, pubkey, 
+            OP_DUP, OP_HASH160, pubkey_hash, OP_EQUALVERIFY, OP_CHECKSIG
+        ]
         inner_script = Script(p2pkh_cmds)
         inner_vm = BitcoinScriptInterpreter(inner_script, tx_sig_hash=self.tx_sig_hash)
 
         while not inner_vm.terminated:
             inner_vm.step()
+
         return inner_vm.is_valid()
 
     def _execute_p2wsh(self, script_hash: bytes) -> bool:
@@ -151,12 +155,13 @@ class BitcoinScriptInterpreter:
             # SegWit transactions have a different execution flow, so we handle them separately
             is_valid = self.execute_witness_program()
             self.terminated = True
+            
             return is_valid
 
         # Traditional Legacy
         while not self.terminated:
             self.step()
-
+        
         return self.is_valid()
 
     @staticmethod
