@@ -13,8 +13,8 @@ def test_p2pkh_success():
 
     # Build script (Unlocking + Locking)
     # P2PKH: <sig> <pubkey> OP_DUP OP_HASH160 <pubkey_hash> OP_EQUALVERIFY OP_CHECKSIG
-    full_cmds = f"<{sig}> <{pubkey}> OP_DUP OP_HASH160 <f{pubkey_hash}> OP_EQUALVERIFY OP_CHECKSIG"
-    script = Script(full_cmds)
+    full_cmds = f"<{sig.hex()}> <{pubkey.hex()}> OP_DUP OP_HASH160 <{pubkey_hash.hex()}> OP_EQUALVERIFY OP_CHECKSIG"
+    script = Script.parse(full_cmds)
 
     # Execute script
     vm = BitcoinScriptInterpreter(script, tx_sig_hash=dummy_tx_hash)

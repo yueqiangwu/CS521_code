@@ -33,6 +33,9 @@ class Script:
 
     @classmethod
     def parse_asm(cls, raw_input: str):
+        if "," in raw_input:
+            raw_input = raw_input.replace(",", " ")
+
         tokens = raw_input.split()
         cmds = []
 
@@ -55,7 +58,9 @@ class Script:
             # other hex
             else:
                 try:
-                    data = bytes.fromhex(token)
+                    if token.startswith(("0x", "0X")):
+                        hex_data = token[2:]
+                    data = bytes.fromhex(hex_data)
                     cmds.append(data)
                 except:
                     raise ValueError(f"Invalid token: {token}")
