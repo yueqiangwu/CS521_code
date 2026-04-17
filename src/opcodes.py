@@ -26,6 +26,7 @@ def opcode(code: int):
             raise ValueError(f"Opcode {code} already registered")
 
         op = func.__name__
+        op = op.upper()
         if op in OP_OPCODE_MAP.keys():
             raise ValueError(f"Operation {op} already registered")
 
