@@ -1,4 +1,4 @@
-from common import op_2_opcode
+from opcodes import op_2_opcode
 
 
 class Script:

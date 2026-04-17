@@ -1,7 +1,8 @@
 import tkinter as tk
 
-from common import opcode_2_op, VMError
+from common import VMError
 from engine import BitcoinScriptInterpreter
+from opcodes import opcode_2_op
 from script import Script
 
 
