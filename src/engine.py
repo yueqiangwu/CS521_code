@@ -1,9 +1,14 @@
 import logging
 import hashlib
-from common import opcode_2_op, VMError, VM_FALSE
+from common import opcode_2_op, VMError, VM_FALSE, op_2_opcode
 from opcodes import OPCODES_MAP
 from script import Script
 from crypto import hash160, verify_sig
+
+OP_DUP = op_2_opcode("OP_DUP")
+OP_HASH160 = op_2_opcode("OP_HASH160")
+OP_EQUALVERIFY = op_2_opcode("OP_EQUALVERIFY")
+OP_CHECKSIG = op_2_opcode("OP_CHECKSIG")
 
 class RuntimeError(Exception):
     pass
@@ -118,13 +123,14 @@ class BitcoinScriptInterpreter:
         # 0x76: OP_DUP, 0xa9: OP_HASH160, 0x88: OP_EQUALVERIFY, 0xac: OP_CHECKSIG
         p2pkh_cmds = [
             sig, pubkey, 
-            0x76, 0xa9, pubkey_hash, 0x88, 0xac
+            OP_DUP, OP_HASH160, pubkey_hash, OP_EQUALVERIFY, OP_CHECKSIG
         ]
         inner_script = Script(p2pkh_cmds)
         inner_vm = BitcoinScriptInterpreter(inner_script, tx_sig_hash=self.tx_sig_hash)
         
         while not inner_vm.terminated:
             inner_vm.step()
+
         return inner_vm.is_valid()
 
     def _execute_p2wsh(self, script_hash: bytes) -> bool:
@@ -161,12 +167,13 @@ class BitcoinScriptInterpreter:
             # SegWit transactions have a different execution flow, so we handle them separately
             is_valid = self.execute_witness_program()
             self.terminated = True
+            
             return is_valid
 
         # Traditional Legacy 
         while not self.terminated:
             self.step()
-
+        
         return self.is_valid()
 
     @staticmethod
