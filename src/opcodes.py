@@ -3,7 +3,7 @@ from crypto import hash160, verify_sig
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from engine import BircoinScriptInterpreter
+    from engine import BitcoinScriptInterpreter
 
 
 OPCODES_MAP: dict[int, function] = {}
@@ -23,20 +23,20 @@ def opcode(func):
 
 
 @opcode
-def op_dup(vm: "BircoinScriptInterpreter"):
+def op_dup(vm: "BitcoinScriptInterpreter"):
     data = vm.top()
     vm.push(data)
 
 
 @opcode
-def op_hash160(vm: "BircoinScriptInterpreter"):
+def op_hash160(vm: "BitcoinScriptInterpreter"):
     data = vm.pop()
     hashed_data = hash160(data)
     vm.push(hashed_data)
 
 
 @opcode
-def op_equal(vm: "BircoinScriptInterpreter"):
+def op_equal(vm: "BitcoinScriptInterpreter"):
     data_1 = vm.pop()
     data_2 = vm.pop()
     if data_1 == data_2:
@@ -46,7 +46,7 @@ def op_equal(vm: "BircoinScriptInterpreter"):
 
 
 @opcode
-def op_equalverify(vm: "BircoinScriptInterpreter"):
+def op_equalverify(vm: "BitcoinScriptInterpreter"):
     op_equal(vm)
     res = vm.pop()
     if res != VM_TRUE:
@@ -54,7 +54,7 @@ def op_equalverify(vm: "BircoinScriptInterpreter"):
 
 
 @opcode
-def op_checksig(vm: "BircoinScriptInterpreter"):
+def op_checksig(vm: "BitcoinScriptInterpreter"):
     pubkey = vm.pop()
     signature = vm.pop()
     if verify_sig(pubkey, signature, vm.tx_sig_hash):
