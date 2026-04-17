@@ -25,6 +25,7 @@ class Script:
         """
         Parse the input HEX/ASM string into a list of instructions
         """
+        print(raw_input)
         raw_input = raw_input.strip()
         if raw_input.startswith("OP_") or " " in raw_input:
             return cls.parse_asm(raw_input)

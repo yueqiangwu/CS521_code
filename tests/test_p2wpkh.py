@@ -1,4 +1,6 @@
 import logging
+
+from src.common import generate_segwit_p2pkh_script
 from src.crypto import hash160
 from src.engine import BitcoinScriptInterpreter
 from src.script import Script
@@ -15,7 +17,7 @@ def test_p2wpkh_success():
 
     # 2. construct ScriptPubKey
     # SegWit P2WPKH: 0x00 <20-byte-hash>
-    script_pubkey_cmds = f"0x00 <{pubkey_hash.hex()}>"
+    script_pubkey_cmds = generate_segwit_p2pkh_script(pubkey_hash)
     script_pubkey = Script.parse(script_pubkey_cmds)
 
     # 3. construct Witness Data
