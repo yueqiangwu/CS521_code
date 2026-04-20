@@ -1,4 +1,6 @@
 colorama @ file:///home/conda/feedstock_root/build_artifacts/colorama_1733218098505/work
+customtkinter @ file:///opt/conda/conda-bld/customtkinter_1704857282683/work
+darkdetect @ file:///home/conda/feedstock_root/build_artifacts/darkdetect_1734328074983/work
 ecdsa @ file:///home/conda/feedstock_root/build_artifacts/ecdsa_1774556716531/work
 exceptiongroup @ file:///home/conda/feedstock_root/build_artifacts/exceptiongroup_1763918002538/work
 gmpy2 @ file:///home/conda/feedstock_root/build_artifacts/gmpy2_1773244936308/work

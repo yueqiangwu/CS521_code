@@ -12,8 +12,8 @@ class BitcoinScriptInterpreter:
         self,
         script: Script,
         initial_stack: list | None = None,
-        tx_sig_hash=None,
         witness: list | None = None,
+        tx_sig_hash: bytes | None = None,
     ):
         self.script = script
         self.stack = initial_stack or []
@@ -23,24 +23,42 @@ class BitcoinScriptInterpreter:
 
         self.pc = 0
         self.terminated = False
+        self.active_inner_vm = None  # P2SH/SegWit
 
     def push(self, item: bytes):
         self.stack.append(item)
 
     def pop(self):
         if len(self.stack) < 1:
-            raise RuntimeError("Stack underflow")
+            raise VMError("Stack underflow")
+
         return self.stack.pop()
 
     def top(self):
         if len(self.stack) < 1:
-            raise RuntimeError("Empty stack")
+            raise VMError("Empty stack")
+
         return self.stack[-1]
 
     def step(self):
         if self.terminated:
             logging.info("Execution finished")
             return
+
+        if self.active_inner_vm is not None:
+            self.active_inner_vm.step()
+
+            if self.active_inner_vm.terminated:
+                self.active_inner_vm = None
+
+                res = self.active_inner_vm.is_valid()
+                if not res:
+                    raise VMError("Inner VM execution failed")
+
+                self.terminated = True
+
+            return
+
         if self.pc >= len(self.script.cmds):
             self.terminated = True
             return
@@ -51,10 +69,15 @@ class BitcoinScriptInterpreter:
         else:
             logging.info(f"Step [{self.pc}] Push Data: {cmd.hex()}")
 
+        if self.pc == 0 and self._is_witness_program():
+            self._setup_witness_vm()
+            return
+
         if isinstance(cmd, bytes):
             self.push(cmd)
         elif cmd in OPCODE_FUNC_MAP.keys():
             func = OPCODE_FUNC_MAP[cmd]
+
             try:
                 func(self)
             except VMError as e:
@@ -65,12 +88,26 @@ class BitcoinScriptInterpreter:
             data = (cmd - 0x50).to_bytes(1, "little")
             self.push(data)
         else:
-            raise RuntimeError(f"Unknown Opcode: {hex(cmd)}")
+            raise VMError(f"Unknown Opcode: {hex(cmd)}")
 
         self.pc += 1
 
+    def execute(self) -> bool:
+        # Check if it's a SegWit transaction by inspecting the scriptPubKey pattern
+        if self._is_witness_program():
+            logging.info("\nSegWit Pattern Detected!")
+            is_valid = self._execute_witness_program()
+            self.terminated = True
+            return is_valid
+
+        # Traditional Legacy
+        while not self.terminated:
+            self.step()
+
+        return self.is_valid()
+
     def is_valid(self) -> bool:
-        if not self.terminated and len(self.stack) == 0:
+        if not self.terminated:
             return False
 
         if len(self.stack) == 0:
@@ -79,15 +116,41 @@ class BitcoinScriptInterpreter:
         res = self.top()
         return res != b"" and res != VM_FALSE
 
-    def is_witness_program(self) -> bool:
-        """Check if the scriptPubKey matches the SegWit pattern: 0x00 + 20 bytes/32 bytes"""
+    def _is_witness_program(self) -> bool:
+        """
+        Check if the scriptPubKey matches the SegWit pattern: 0x00 + 20 bytes/32 bytes
+        """
         cmds = self.script.cmds
+
         if len(cmds) == 2 and cmds[0] == 0x00 and isinstance(cmds[1], bytes):
             if len(cmds[1]) == 20 or len(cmds[1]) == 32:
                 return True
         return False
 
-    def execute_witness_program(self) -> bool:
+    def _setup_witness_vm(self):
+        """
+        Initialize the SegWit sub-virtual machine
+        """
+        program = self.script.cmds[1]
+
+        # P2WPKH
+        if len(program) == 20:
+            sig, pubkey = self.witness[0], self.witness[1]
+            p2pkh_cmds = generate_p2pkh_script(sig, pubkey, program)
+            self.active_inner_vm = BitcoinScriptInterpreter(
+                Script(p2pkh_cmds), tx_sig_hash=self.tx_sig_hash
+            )
+        # P2WSH
+        elif len(program) == 32:
+            witness_script_bytes = self.witness[-1]
+            args = self.witness[:-1]
+            self.active_inner_vm = BitcoinScriptInterpreter(
+                Script.parse(witness_script_bytes),
+                initial_stack=args,
+                tx_sig_hash=self.tx_sig_hash,
+            )
+
+    def _execute_witness_program(self) -> bool:
         """Divide P2WPKH and P2WSH"""
         cmds = self.script.cmds
         program = cmds[1]
@@ -141,34 +204,6 @@ class BitcoinScriptInterpreter:
             inner_script, initial_stack=args, tx_sig_hash=self.tx_sig_hash
         )
 
-        while not inner_vm.terminated:
-            inner_vm.step()
-        return inner_vm.is_valid()
-
-    def execute(self) -> bool:
-        # 2. Check if it's a SegWit transaction by inspecting the scriptPubKey pattern
-        if self.is_witness_program():
-            logging.info("\nSegWit Pattern Detected!")
-            # SegWit transactions have a different execution flow, so we handle them separately
-            is_valid = self.execute_witness_program()
-            self.terminated = True
-
-            return is_valid
-
-        # Traditional Legacy
-        while not self.terminated:
-            self.step()
-
-        return self.is_valid()
-
-    @staticmethod
-    def handle_p2sh(vm, redeem_script_bytes, tx_sig_hash):
-        logging.info("\nP2SH Pattern Detected! Initializing Inner VM...")
-        inner_script = Script.parse(redeem_script_bytes)
-        # Get the current stack elements to pass as initial stack for the inner VM
-        inner_vm = BitcoinScriptInterpreter(
-            inner_script, vm.stack.get_elements().copy(), tx_sig_hash
-        )
         while not inner_vm.terminated:
             inner_vm.step()
         return inner_vm.is_valid()
