@@ -1,7 +1,6 @@
 import logging
-import tkinter as tk
 
-from ui import InterpreterUI
+from ui import BitcoinIDE
 
 logging.basicConfig(
     level=logging.INFO,
@@ -14,6 +13,5 @@ logging.basicConfig(
 
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = InterpreterUI(root)
-    root.mainloop()
+    app = BitcoinIDE()
+    app.mainloop()
