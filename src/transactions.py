@@ -1,6 +1,6 @@
 from common import VMError
 from opcodes import op_2_opcode
-from crypto import hash160
+from crypto import hash160, sha256
 from engine import BitcoinScriptInterpreter
 from script import Script
 import logging
@@ -51,4 +51,30 @@ def p2sh(signatures: list[bytes], redeem_script: Script, tx_sig_hash: bytes) -> 
         return is_valid
     except Exception as e:
         print(f"P2SH Execution failed with exception: {e}")
+        return False
+    
+
+def p2wsh(signatures: list[bytes], witness_script: Script, tx_sig_hash: bytes) -> bool:
+
+    witness_script_bytes = witness_script.serialize()
+    
+    script_hash = sha256(witness_script_bytes)
+
+    pubkey_asm = f"OP_0 <{script_hash.hex()}>"
+    script_pubkey = Script.parse(pubkey_asm)
+
+    witness_data = signatures + [witness_script_bytes]
+
+    vm = BitcoinScriptInterpreter(
+        script=script_pubkey, 
+        witness=witness_data, 
+        tx_sig_hash=tx_sig_hash
+    )
+    
+    try:
+        is_valid = vm.execute()
+        print(f"P2WSH Validation Result: {is_valid}")
+        return is_valid
+    except Exception as e:
+        print(f"P2WSH Execution failed with exception: {e}")
         return False

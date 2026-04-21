@@ -132,7 +132,7 @@ class BitcoinScriptInterpreter:
         """
         cmds = self.script.cmds
 
-        if len(cmds) == 2 and cmds[0] == b'\x00' and isinstance(cmds[1], bytes):
+        if len(cmds) == 2  and isinstance(cmds[1], bytes) and (cmds[0] == b'\x00' or cmds[0] == 0x00):
             
             if len(cmds[1]) == 20 or len(cmds[1]) == 32:
                 return True
@@ -194,7 +194,7 @@ class BitcoinScriptInterpreter:
             raise VMError("P2WSH script hash mismatch")
 
         # Execute the witness script in a new VM instance, with the args as the initial stack
-        inner_script = Script.parse(witness_script_bytes)
+        inner_script = Script.parse(witness_script_bytes.hex())
         inner_vm = BitcoinScriptInterpreter(
             inner_script, initial_stack=args, tx_sig_hash=self.tx_sig_hash
         )
