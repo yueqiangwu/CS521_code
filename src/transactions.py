@@ -10,7 +10,7 @@ import logging
 def p2wpkh(sig, pubkey, tx_sig_hash) -> bool:
     pubkey_hash = hash160(pubkey)
 
-    script_pubkey_cmds = [0x00, pubkey_hash]  # Witness Version 0  # 20字节的公钥哈希
+    script_pubkey_cmds = [0x00, pubkey_hash] 
     script_pubkey = Script(script_pubkey_cmds)
 
     witness_data = [sig, pubkey]
