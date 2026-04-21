@@ -72,14 +72,11 @@ def test_p2sh_tampered_script_fails():
     
     initial_stack = [b'', b'fake_sig', malicious_script_bytes]
     
-    # 5. 执行验证
     vm = BitcoinScriptInterpreter(
         script=script_pubkey, 
         initial_stack=initial_stack, 
         tx_sig_hash=dummy_tx_hash
     )
     
-    # 预期结果：OP_HASH160 计算 malicious_script_bytes 的哈希时，
-    # 会发现它与锁定脚本里的 correct_hash 对不上，因此 OP_EQUAL 失败，返回 False
     assert vm.execute() is False
     logging.info("Tampered script interception test passed!\n")
