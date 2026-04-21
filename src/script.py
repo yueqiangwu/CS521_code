@@ -25,7 +25,6 @@ class Script:
         """
         Parse the input HEX/ASM string into a list of instructions
         """
-        print(raw_input)
         raw_input = raw_input.strip()
         if raw_input.startswith("OP_") or " " in raw_input:
             return cls.parse_asm(raw_input)
@@ -53,6 +52,7 @@ class Script:
             # opcode
             elif token.startswith("OP_"):
                 opcode = op_2_opcode(token)
+                
                 if opcode is None:
                     raise ValueError(f"Unknown operation: {token}")
                 cmds.append(opcode)
@@ -134,3 +134,23 @@ class Script:
                 cmds.append(current)
 
         return cls(cmds)
+
+
+    def serialize(self) -> bytes:
+
+            result = b""
+            for cmd in self.cmds:
+                if isinstance(cmd, int):
+                    result += bytes([cmd])
+                elif isinstance(cmd, bytes):
+                    length = len(cmd)
+                    if length < 0x4C:
+                        result += bytes([length])
+                    elif length <= 0xFF:
+                        result += bytes([0x4C, length])
+                    elif length <= 0xFFFF:
+                        result += bytes([0x4D]) + length.to_bytes(2, "little")
+                    else:
+                        result += bytes([0x4E]) + length.to_bytes(4, "little")
+                    result += cmd
+            return result

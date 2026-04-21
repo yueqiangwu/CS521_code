@@ -1,0 +1,44 @@
+import logging
+import pytest
+from src.script import Script
+from src.engine import BitcoinScriptInterpreter 
+from src.transactions import p2wsh
+from src.crypto import hash160, sha256
+
+def test_p2wsh_multisig_function():
+    logging.info("=== Running P2WSH Multisig Test (Explicit Values via Wrapper) ===")
+
+    # ==========================================
+    # 1. 使用你提供的绝对有效的真实测试数据
+    # ==========================================
+    dummy_tx_hash = bytes.fromhex("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+
+    pubkey1 = bytes.fromhex("79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8")
+    pubkey2 = bytes.fromhex("c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee51ae168fea63dc339a3c58419466ceaeef7f632653266d0e1236431a950cfe52a")
+    
+    sig1 = bytes.fromhex("422d127175294489c288295b0c849955dd0b4baa533a3c3f17ff8eb2e4cf80b06c29a4e3999b3c5810eb02dbc46516367e27dad6accc8fa1b94d1fa03fe6944201")
+
+    # ==========================================
+    # 2. 构造 Witness Script (见证脚本)
+    # ==========================================
+    # 这里的逻辑和 P2SH 的 Redeem Script 完全一样
+    witness_asm = f"OP_1 <{pubkey1.hex()}> <{pubkey2.hex()}> OP_2 OP_CHECKMULTISIG"
+    witness_script = Script.parse(witness_asm)
+    
+    # ==========================================
+    # 3. 准备签名参数列表
+    # ==========================================
+    # 多签需要抵消 OP_CHECKMULTISIG bug 的空字节
+    signatures = [b'', sig1]
+
+    # ==========================================
+    # 4. 调用 p2wsh 封装函数执行验证
+    # ==========================================
+    try:
+        is_valid = p2wsh(signatures, witness_script, dummy_tx_hash)
+        logging.info(f"Validation Result: {is_valid}")
+        assert is_valid is True, "P2WSH failed to validate the correct witness script and signature"
+        logging.info("P2WSH wrapper test passed!\n")
+
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
