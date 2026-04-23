@@ -1,8 +1,8 @@
 import hashlib
 import logging
 
-from common import VMError, VM_FALSE, generate_p2pkh_script
-from crypto import hash160, verify_sig
+from common import VMError, VM_TRUE, VM_FALSE, generate_p2pkh_script
+from crypto import hash160
 from opcodes import opcode_2_op, OPCODE_FUNC_MAP
 from script import Script
 
@@ -25,7 +25,9 @@ class BitcoinScriptInterpreter:
         self.terminated = False
         self.active_inner_vm = None  # P2SH/SegWit
 
-    def push(self, item: bytes):
+    # ========== Tool functions ==========
+
+    def push(self, item):
         self.stack.append(item)
 
     def pop(self):
@@ -40,87 +42,100 @@ class BitcoinScriptInterpreter:
 
         return self.stack[-1]
 
+    # ========== Execute functions ==========
+
     def step(self):
         if self.terminated:
-            logging.info("Execution finished")
+            logging.info("Execution already finished")
             return
 
+        # Execute inner vm first
         if self.active_inner_vm is not None:
             self.active_inner_vm.step()
 
             if self.active_inner_vm.terminated:
-                self.active_inner_vm = None
-
-                res = self.active_inner_vm.is_valid()
+                res = self.active_inner_vm._is_valid()
                 if not res:
                     raise VMError("Inner VM execution failed")
 
+                self.push(VM_TRUE)
+                self.pc = len(self.script.cmds)
                 self.terminated = True
-
+                self.active_inner_vm = None
             return
 
-        if self.pc >= len(self.script.cmds):
-            self.terminated = True
+        # Check if it's a SegWit transaction
+        if self.pc == 0 and self._is_witness_program():
+            logging.info("\nSegWit Pattern Detected!")
+
+            self._execute_witness_program(step_mode=True)
             return
 
+        # Fetch cmd using pc
         cmd = self.script.cmds[self.pc]
- 
-
-        if isinstance(cmd, int):
-            logging.info(f"Step [{self.pc}] Executing: {opcode_2_op(cmd)}")
-        else:
+        if isinstance(cmd, bytes):
             logging.info(f"Step [{self.pc}] Push Data: {cmd.hex()}")
 
-
-        if isinstance(cmd, bytes):
             self.push(cmd)
         elif cmd in OPCODE_FUNC_MAP.keys():
-            func = OPCODE_FUNC_MAP[cmd]
+            logging.info(f"Step [{self.pc}] Executing: {opcode_2_op(cmd)}")
 
+            func = OPCODE_FUNC_MAP[cmd]
             try:
                 func(self)
             except VMError as e:
-                logging.info(f"Invalid transaction: {e.message}")
+                logging.info(f"Transaction failed: {e.message}")
+
                 self.terminated = True
                 raise e
-        elif 0x51 <= cmd <= 0x60:
-            data = (cmd - 0x50).to_bytes(1, "little")
-            self.push(data)
         else:
             raise VMError(f"Unknown Opcode: {hex(cmd)}")
 
         self.pc += 1
+        if self.pc == len(self.script.cmds):
+            self.terminated = True
+
+        # Check if it's a P2SH transaction
+        if self.terminated and self._is_valid() and self._is_p2sh_pattern():
+            logging.info(
+                "\nPhase 1 (Fingerprint Verification) Passed, Preparing to Execute P2SH Phase 2!"
+            )
+
+            redeem_script_bytes = self.pop()
+            self._execute_p2sh(redeem_script_bytes, self.stack, step_mode=True)
+            self.terminated = False
 
     def execute(self) -> bool:
-        # Check if it's a SegWit transaction by inspecting the scriptPubKey pattern
+        if self.terminated:
+            logging.info("Execution already finished")
+            return
 
+        # Check if it's a SegWit transaction by inspecting the scriptPubKey pattern
         if self._is_witness_program():
             logging.info("\nSegWit Pattern Detected!")
-            is_valid = self._execute_witness_program()
-            self.terminated = True
-            return is_valid
-        saved_stack = self.stack.copy()
 
-        # Traditional Legacy
+            return self._execute_witness_program()
+
+        # Traditional legacy
         while not self.terminated:
             self.step()
 
+        # Check if it's a P2SH transaction
+        if self._is_valid() and self._is_p2sh_pattern():
+            logging.info(
+                "\nPhase 1 (Fingerprint Verification) Passed, Preparing to Execute P2SH Phase 2!"
+            )
 
-        if self.is_valid() and self.is_p2sh_pattern():
-            logging.info("\n>>> Phase 1 (Fingerprint Verification) Passed, Preparing to Execute P2SH Phase 2 <<<")
-            
+            redeem_script_bytes = self.pop()
 
-            redeem_script_bytes = saved_stack.pop()
-            
-            return self.handle_p2sh(redeem_script_bytes, saved_stack, self.tx_sig_hash)
+            return self._execute_p2sh(redeem_script_bytes, self.stack)
 
-        return self.is_valid()
+        return self._is_valid()
 
-    def is_valid(self) -> bool:
-        if not self.terminated:
-            return False
+    # ========== Transaction check functions ==========
 
-        if len(self.stack) == 0:
+    def _is_valid(self) -> bool:
+        if not self.terminated or len(self.stack) == 0:
             return False
 
         res = self.top()
@@ -131,35 +146,40 @@ class BitcoinScriptInterpreter:
         Check if the scriptPubKey matches the SegWit pattern: 0x00 + 20 bytes/32 bytes
         """
         cmds = self.script.cmds
+        return (
+            len(cmds) == 2
+            and (cmds[0] == b"\x00" or cmds[0] == 0x00)
+            and isinstance(cmds[1], bytes)
+            and (len(cmds[1]) == 20 or len(cmds[1]) == 32)
+        )
 
-        if len(cmds) == 2  and isinstance(cmds[1], bytes) and (cmds[0] == b'\x00' or cmds[0] == 0x00):
-            
-            if len(cmds[1]) == 20 or len(cmds[1]) == 32:
-                return True
-        return False
-
-
-    def is_p2sh_pattern(self) -> bool:
-        """Check if the scriptPubKey is a P2SH pattern: OP_HASH160 <20-byte hash> OP_EQUAL"""
-        # 0xA9 = OP_HASH160, 0x87 = OP_EQUAL
+    def _is_p2sh_pattern(self) -> bool:
+        """
+        Check if the scriptPubKey is a P2SH pattern: OP_HASH160 <20-byte hash> OP_EQUAL
+        """
         cmds = self.script.cmds
+        # 0xA9 = OP_HASH160, 0x87 = OP_EQUAL
         return len(cmds) == 3 and cmds[0] == 0xA9 and cmds[2] == 0x87
 
-    def _execute_witness_program(self) -> bool:
-        """Divide P2WPKH and P2WSH"""
+    # ========== Helper execute functions ==========
+
+    def _execute_witness_program(self, step_mode: bool = False) -> bool:
+        """
+        Divide P2WPKH and P2WSH
+        """
         cmds = self.script.cmds
         program = cmds[1]
 
         if len(program) == 20:
             logging.info("Executing P2WPKH...")
-            return self._execute_p2wpkh(program)
+            return self._execute_p2wpkh(program, step_mode)
         elif len(program) == 32:
             logging.info("Executing P2WSH...")
-            return self._execute_p2wsh(program)
+            return self._execute_p2wsh(program, step_mode)
         else:
             raise VMError("Invalid witness program length")
 
-    def _execute_p2wpkh(self, pubkey_hash: bytes) -> bool:
+    def _execute_p2wpkh(self, pubkey_hash: bytes, step_mode: bool = False) -> bool:
         if len(self.witness) != 2:
             raise VMError(
                 "P2WPKH requires exactly 2 items in witness (signature, pubkey)"
@@ -177,12 +197,16 @@ class BitcoinScriptInterpreter:
         inner_script = Script.parse(p2pkh_cmds)
         inner_vm = BitcoinScriptInterpreter(inner_script, tx_sig_hash=self.tx_sig_hash)
 
+        if step_mode:
+            self.active_inner_vm = inner_vm
+            return True
+
         while not inner_vm.terminated:
             inner_vm.step()
 
-        return inner_vm.is_valid()
+        return inner_vm._is_valid()
 
-    def _execute_p2wsh(self, script_hash: bytes) -> bool:
+    def _execute_p2wsh(self, script_hash: bytes, step_mode: bool = False) -> bool:
         if len(self.witness) == 0:
             raise VMError("P2WSH requires at least 1 item in witness (witnessScript)")
 
@@ -194,42 +218,57 @@ class BitcoinScriptInterpreter:
             raise VMError("P2WSH script hash mismatch")
 
         # Execute the witness script in a new VM instance, with the args as the initial stack
-        inner_script = Script.parse(witness_script_bytes.hex())
+        try:
+            inner_script = Script.parse(witness_script_bytes.hex())
+        except Exception as e:
+            logging.error(f"P2WSH inner script parsing failed: {e}")
+            return False
+
         inner_vm = BitcoinScriptInterpreter(
             inner_script, initial_stack=args, tx_sig_hash=self.tx_sig_hash
         )
 
+        if step_mode:
+            self.active_inner_vm = inner_vm
+            return True
+
         while not inner_vm.terminated:
             inner_vm.step()
-        return inner_vm.is_valid()
-    
-    def handle_p2sh(self, redeem_script_bytes: bytes, inner_stack: list, tx_sig_hash: bytes) -> bool:
 
-        logging.info("=== Starting P2SH Inner VM ===")
-        
+        return inner_vm._is_valid()
+
+    def _execute_p2sh(
+        self, redeem_script_bytes: bytes, inner_stack: list, step_mode: bool = False
+    ) -> bool:
         try:
             inner_script = Script.parse_hex(redeem_script_bytes.hex())
         except Exception as e:
-            logging.error(f"P2SH Inner Script Parsing Failed: {e}")
+            logging.error(f"P2SH inner script parsing failed: {e}")
             return False
 
-    
         inner_vm = BitcoinScriptInterpreter(
-            script=inner_script, 
-            initial_stack=inner_stack, 
-            tx_sig_hash=tx_sig_hash
+            script=inner_script, initial_stack=inner_stack, tx_sig_hash=self.tx_sig_hash
         )
 
-        try:
-            is_valid = inner_vm.execute()
-            
-            if is_valid:
-                logging.info("=== P2SH Inner VM Validation Passed! ===")
-            else:
-                logging.warning("=== P2SH Inner VM Validation Failed! ===")
-                
-            return is_valid
+        if step_mode:
+            self.active_inner_vm = inner_vm
+            return True
 
-        except Exception as e:
-            logging.error(f"P2SH Inner VM Execution Error: {e}")
-            return False
+        while not inner_vm.terminated:
+            inner_vm.step()
+
+        return inner_vm._is_valid()
+
+        # try:
+        #     is_valid = inner_vm.execute()
+
+        #     if is_valid:
+        #         logging.info("=== P2SH Inner VM Validation Passed! ===")
+        #     else:
+        #         logging.warning("=== P2SH Inner VM Validation Failed! ===")
+
+        #     return is_valid
+
+        # except Exception as e:
+        #     logging.error(f"P2SH Inner VM Execution Error: {e}")
+        #     return False
