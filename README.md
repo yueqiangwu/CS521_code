@@ -19,19 +19,20 @@ bitcoin_script_interpreter/
 ├── src/
 │   ├── __init__.py
 │   ├── common.py          # Useful definitions
-│   ├── engine.py          # Core Virtual Machine (VM) logic
-│   ├── opcodes.py         # Definitions for all opcode functions
 │   ├── crypto.py          # Cryptographic helper functions (Hash160, ECDSA verification)
-│   ├── script.py          # Script parser: Converts ASM/HEX to a list of instructions
+│   ├── engine.py          # Core Virtual Machine (VM) logic
 │   ├── main.py            # Project entry point: Demonstrates the execution process
+│   ├── opcodes.py         # Definitions for all opcode functions
+│   ├── script.py          # Script parser: Converts ASM/HEX to a list of instructions
+│   ├── transactions.py    # Dealing with different transactions
 │   └── ui.py              # Simple user interface
 ├── tests/
 │   ├── __init__.py
+│   ├── test_p2pk.py       # P2PK test cases
 │   ├── test_p2pkh.py      # P2PKH test cases
 │   ├── test_p2sh.py       # P2SH test cases
-│   ├── test_p2wpkh.py      # P2WPKH test cases
-│   ├── test_p2wsh.py       # P2WSH test cases
-│   └── test_multisig.py   # Multisig test cases
+│   ├── test_p2wpkh.py     # P2WPKH test cases
+│   ├── test_p2wsh.py      # P2WSH test cases
 ├── requirements.txt       # Dependencies (ecdsa, hashlib, etc.)
 └── README.md
 ```

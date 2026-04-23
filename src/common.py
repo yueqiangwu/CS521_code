@@ -24,4 +24,4 @@ def generate_p2pkh_script(sig: bytes, pubkey: bytes, pubkey_hash: bytes) -> str:
 
 
 def generate_segwit_p2pkh_script(pubkey_hash: bytes) -> str:
-    return generate_asm_script("0x00 <{}>", pubkey_hash)
+    return generate_asm_script("OP_0 <{}>", pubkey_hash)
