@@ -1,7 +1,7 @@
 import hashlib
 import logging
 
-from common import VMError, VM_FALSE, generate_p2pkh_script
+from common import VMError, VM_TRUE, VM_FALSE, generate_p2pkh_script
 from crypto import hash160
 from opcodes import opcode_2_op, OPCODE_FUNC_MAP
 from script import Script
@@ -58,6 +58,8 @@ class BitcoinScriptInterpreter:
                 if not res:
                     raise VMError("Inner VM execution failed")
 
+                self.push(VM_TRUE)
+                self.pc = len(self.script.cmds)
                 self.terminated = True
                 self.active_inner_vm = None
             return
@@ -66,7 +68,7 @@ class BitcoinScriptInterpreter:
         if self.pc == 0 and self._is_witness_program():
             logging.info("\nSegWit Pattern Detected!")
 
-            self._execute_witness_program(True)
+            self._execute_witness_program(step_mode=True)
             return
 
         # Fetch cmd using pc
@@ -100,7 +102,7 @@ class BitcoinScriptInterpreter:
             )
 
             redeem_script_bytes = self.pop()
-            self._execute_p2sh(redeem_script_bytes, self.stack, True)
+            self._execute_p2sh(redeem_script_bytes, self.stack, step_mode=True)
             self.terminated = False
 
     def execute(self) -> bool:
@@ -196,6 +198,7 @@ class BitcoinScriptInterpreter:
         inner_vm = BitcoinScriptInterpreter(inner_script, tx_sig_hash=self.tx_sig_hash)
 
         if step_mode:
+            self.active_inner_vm = inner_vm
             return True
 
         while not inner_vm.terminated:
@@ -226,6 +229,7 @@ class BitcoinScriptInterpreter:
         )
 
         if step_mode:
+            self.active_inner_vm = inner_vm
             return True
 
         while not inner_vm.terminated:
@@ -247,6 +251,7 @@ class BitcoinScriptInterpreter:
         )
 
         if step_mode:
+            self.active_inner_vm = inner_vm
             return True
 
         while not inner_vm.terminated:

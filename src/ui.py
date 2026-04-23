@@ -3,7 +3,7 @@ import json
 import logging
 import os
 
-from common import generate_asm_script
+from common import TX_HASH_SIZE, generate_asm_script
 from crypto import hash160, sha256, generate_sig_pair
 from engine import BitcoinScriptInterpreter
 from script import Script
@@ -13,11 +13,6 @@ from tkinter import messagebox, filedialog
 
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
-
-
-TX_HASH_SIZE = 32
-PUBKEY_SIZE = 33
-SIG_SIZE = 70
 
 
 class BitcoinIDE(ctk.CTk):
@@ -30,13 +25,13 @@ class BitcoinIDE(ctk.CTk):
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
-        self._setup_sidebar()
-        self._setup_editor_area()
-        self._setup_runtime_view()
-
         self.vm = None
         self.instructions = []
         self.current_tx_hash = os.urandom(TX_HASH_SIZE)
+
+        self._setup_sidebar()
+        self._setup_editor_area()
+        self._setup_runtime_view()
 
     # ========== Draw functions ==========
 
@@ -85,6 +80,14 @@ class BitcoinIDE(ctk.CTk):
         self.editor_frame = ctk.CTkFrame(self)
         self.editor_frame.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
 
+        # TX Hash
+        ctk.CTkLabel(self.editor_frame, text="TX Hash (random)").pack(
+            anchor="w", padx=10
+        )
+        self.tx_hash_input = ctk.CTkTextbox(self.editor_frame, height=20)
+        self.tx_hash_input.pack(fill="x", padx=10, pady=5)
+        self.tx_hash_input.insert("1.0", self.current_tx_hash.hex())
+
         # ScriptSig
         ctk.CTkLabel(self.editor_frame, text="ScriptSig (Unlocking Script)").pack(
             anchor="w", padx=10
@@ -100,9 +103,9 @@ class BitcoinIDE(ctk.CTk):
         self.pub_input.pack(fill="x", padx=10, pady=5)
 
         # Witness
-        ctk.CTkLabel(
-            self.editor_frame, text="Witness Data (for SegWit, one per line)"
-        ).pack(anchor="w", padx=10)
+        ctk.CTkLabel(self.editor_frame, text="Witness Data (for SegWit)").pack(
+            anchor="w", padx=10
+        )
         self.witness_input = ctk.CTkTextbox(self.editor_frame, height=100)
         self.witness_input.pack(fill="x", padx=10, pady=5)
 
@@ -133,6 +136,15 @@ class BitcoinIDE(ctk.CTk):
         )
         self.btn_reset.pack(side="left", padx=10)
 
+        self.btn_clear_all = ctk.CTkButton(
+            self.ctrl_frame,
+            text="Clear All",
+            command=self.clear_all,
+            width=100,
+            fg_color="orange",
+        )
+        self.btn_clear_all.pack(side="left", padx=10)
+
     def _setup_runtime_view(self):
         """
         View area: instruction lists & stack
@@ -157,20 +169,23 @@ class BitcoinIDE(ctk.CTk):
     def _load_p2pk_template(self):
         logging.info("Loading P2PK template...")
 
-        self.reset()
+        self.clear_all()
         self.current_tx_hash = os.urandom(TX_HASH_SIZE)
 
         pk, sig = generate_sig_pair(self.current_tx_hash)
-        scriptSig = generate_asm_script("<{}> # sig\n<{}> # pubkey", sig, pk)
-        scriptPubkey = generate_asm_script("<{}>\nOP_CHECKSIG", pk)
+        scriptSig = generate_asm_script("<{}> # sig", sig)
+        scriptPubkey = generate_asm_script("<{}> # pubkey\nOP_CHECKSIG", pk)
 
+        self.tx_hash_input.insert("1.0", self.current_tx_hash.hex())
         self.sig_input.insert("1.0", scriptSig)
         self.pub_input.insert("1.0", scriptPubkey)
+
+        self.init_vm()
 
     def _load_p2pkh_template(self):
         logging.info("Loading P2PKH template...")
 
-        self.reset()
+        self.clear_all()
         self.current_tx_hash = os.urandom(TX_HASH_SIZE)
 
         pk, sig = generate_sig_pair(self.current_tx_hash)
@@ -180,13 +195,16 @@ class BitcoinIDE(ctk.CTk):
             "OP_DUP\nOP_HASH160\n<{}>\nOP_EQUALVERIFY\nOP_CHECKSIG", pkh
         )
 
+        self.tx_hash_input.insert("1.0", self.current_tx_hash.hex())
         self.sig_input.insert("1.0", scriptSig)
         self.pub_input.insert("1.0", scriptPubkey)
+
+        self.init_vm()
 
     def _load_p2sh_template(self):
         logging.info("Loading P2SH template...")
 
-        self.reset()
+        self.clear_all()
         self.current_tx_hash = os.urandom(TX_HASH_SIZE)
 
         pk1, sig1 = generate_sig_pair(self.current_tx_hash)
@@ -197,19 +215,22 @@ class BitcoinIDE(ctk.CTk):
         redeem_script_bytes = Script.parse_asm(redeem_script_asm).serialize()
         redeem_script_hash = hash160(redeem_script_bytes)
         scriptSig = generate_asm_script(
-            "OP_0\n<{}>\n<{}>\n{{{}}}", sig1, sig2, redeem_script_hash
+            "OP_0\n<{}>\n<{}>\n{{{}}}", sig1, sig2, redeem_script_asm
         )
         scriptPubkey = generate_asm_script(
             "OP_HASH160\n<{}>\nOP_EQUAL", redeem_script_hash
         )
 
+        self.tx_hash_input.insert("1.0", self.current_tx_hash.hex())
         self.sig_input.insert("1.0", scriptSig)
         self.pub_input.insert("1.0", scriptPubkey)
+
+        self.init_vm()
 
     def _load_p2wpkh_template(self):
         logging.info("Loading P2WPKH template...")
 
-        self.reset()
+        self.clear_all()
         self.current_tx_hash = os.urandom(TX_HASH_SIZE)
 
         pk, sig = generate_sig_pair(self.current_tx_hash)
@@ -219,9 +240,12 @@ class BitcoinIDE(ctk.CTk):
         scriptPubkey = generate_asm_script("OP_0 <{}>", pkh)
         witness = generate_asm_script("<{}>\n<{}>", sig, pk)
 
+        self.tx_hash_input.insert("1.0", self.current_tx_hash.hex())
         self.sig_input.insert("1.0", scriptSig)
         self.pub_input.insert("1.0", scriptPubkey)
         self.witness_input.insert("1.0", witness)
+
+        self.init_vm()
 
     def _load_p2wsh_template(self):
         logging.info("Loading P2WSH template...")
@@ -236,11 +260,14 @@ class BitcoinIDE(ctk.CTk):
 
         scriptSig = ""
         scriptPubkey = generate_asm_script("OP_0 <{}>", witness_script_hash)
-        witness = generate_asm_script("<{}>\n{{{}}}", sig, witness_script_hash)
+        witness = generate_asm_script("<{}>\n{{{}}}", sig, witness_script_asm)
 
+        self.tx_hash_input.insert("1.0", self.current_tx_hash.hex())
         self.sig_input.insert("1.0", scriptSig)
         self.pub_input.insert("1.0", scriptPubkey)
         self.witness_input.insert("1.0", witness)
+
+        self.init_vm()
 
     # ========== VM operating functions ==========
 
@@ -253,10 +280,10 @@ class BitcoinIDE(ctk.CTk):
             pub_text = self.pub_input.get("1.0", "end").strip()
             witness_text = self.witness_input.get("1.0", "end").strip()
 
-            witness = [bytes.fromhex(x) for x in witness_text.split() if x]
-
             full_script_hex = f"{sig_text}\n{pub_text}"
             script = Script.parse(full_script_hex)
+            witness_script = Script.parse(witness_text)
+            witness = witness_script.cmds
 
             self.vm = BitcoinScriptInterpreter(
                 script, witness=witness, tx_sig_hash=self.current_tx_hash
@@ -271,6 +298,7 @@ class BitcoinIDE(ctk.CTk):
             self._lock_inputs(True)
             return True
         except Exception as e:
+            logging.exception(e)
             messagebox.showerror("Error", f"Failed to initialize: {e}")
             return False
 
@@ -293,6 +321,7 @@ class BitcoinIDE(ctk.CTk):
 
                 self._show_result()
         except Exception as e:
+            logging.exception(e)
             messagebox.showerror("VM Error", str(e))
 
     def run_all(self):
@@ -309,6 +338,7 @@ class BitcoinIDE(ctk.CTk):
             while not self.vm.terminated:
                 self.vm.step()
         except Exception as e:
+            logging.exception(e)
             messagebox.showerror("VM Error", str(e))
             return
 
@@ -317,15 +347,31 @@ class BitcoinIDE(ctk.CTk):
 
     def reset(self):
         self.vm = None
+        self.instructions.clear()
+
         self._lock_inputs(False)
-        self._update_ins_list(clear=True)
-        self._update_stack_view(clear=True)
+        self._update_ui_state(clear=True)
+
+    def clear_all(self):
+        self.reset()
+
+        self.tx_hash_input.delete("1.0", "end")
+        self.sig_input.delete("1.0", "end")
+        self.pub_input.delete("1.0", "end")
+        self.witness_input.delete("1.0", "end")
 
     # ========== UI updates ==========
 
-    def _update_ui_state(self):
-        self._update_ins_list()
-        self._update_stack_view()
+    def _lock_inputs(self, lock: bool):
+        state = "disabled" if lock else "normal"
+        self.tx_hash_input.configure(state=state)
+        self.sig_input.configure(state=state)
+        self.pub_input.configure(state=state)
+        self.witness_input.configure(state=state)
+
+    def _update_ui_state(self, clear: bool = False):
+        self._update_ins_list(clear)
+        self._update_stack_view(clear)
 
     def _update_ins_list(self, clear: bool = False):
         """
@@ -388,12 +434,6 @@ class BitcoinIDE(ctk.CTk):
             ).pack(side="left", padx=5)
             ctk.CTkLabel(frame, text=val).pack(side="right", padx=5)
 
-    def _lock_inputs(self, lock: bool):
-        state = "disabled" if lock else "normal"
-        self.sig_input.configure(state=state)
-        self.pub_input.configure(state=state)
-        self.witness_input.configure(state=state)
-
     def _show_result(self):
         valid = self.vm._is_valid()
         message = "Transaction Success!" if valid else "Transaction Failed."
@@ -432,4 +472,5 @@ class BitcoinIDE(ctk.CTk):
                 witness_list = data.get("Witness", [])
                 self.witness_input.insert("1.0", "\n".join(witness_list))
             except Exception as e:
+                logging.exception(e)
                 messagebox.showerror("Error", f"Invalid file format: {e}")

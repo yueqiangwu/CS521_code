@@ -54,7 +54,7 @@ class Script:
                 inner_script = cls.parse_asm(inner_asm)
                 cmds.append(inner_script.serialize())
             # Handling data
-            if token.startswith("<") and token.endswith(">"):
+            elif token.startswith("<") and token.endswith(">"):
                 try:
                     cmds.append(bytes.fromhex(token[1:-1]))
                 except ValueError:
