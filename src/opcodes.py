@@ -1,5 +1,5 @@
 from common import VM_TRUE, VM_FALSE, VMError
-from crypto import hash160, verify_sig, verify_multisig
+from crypto import hash160, verify_sig, verify_multisig, verify_schnorr
 from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
@@ -102,10 +102,37 @@ def op_equalverify(vm: "BitcoinScriptInterpreter"):
 def op_checksig(vm: "BitcoinScriptInterpreter"):
     pubkey = vm.pop()
     signature = vm.pop()
-    if verify_sig(pubkey, signature, vm.tx_sig_hash):
-        vm.push(VM_TRUE)
+    # 32-byte x-only pubkey → BIP340 Schnorr; 33-byte compressed → ECDSA
+    if len(pubkey) == 32:
+        result = verify_schnorr(pubkey, signature, vm.tx_sig_hash)
     else:
-        vm.push(VM_FALSE)
+        result = verify_sig(pubkey, signature, vm.tx_sig_hash)
+    vm.push(VM_TRUE if result else VM_FALSE)
+
+
+@opcode(0xBA)
+def op_checksigadd(vm: "BitcoinScriptInterpreter"):
+    """BIP342 Tapscript: pop pubkey, n, sig; push n+1 if sig valid, n if sig empty, fail otherwise."""
+    pubkey = vm.pop()
+    n_bytes = vm.pop()
+    sig = vm.pop()
+
+    n = int.from_bytes(n_bytes, "little") if n_bytes else 0
+
+    if not sig:
+        vm.push(n_bytes)
+        return
+
+    if len(pubkey) == 32:
+        result = verify_schnorr(pubkey, sig, vm.tx_sig_hash)
+    else:
+        result = verify_sig(pubkey, sig, vm.tx_sig_hash)
+
+    if not result:
+        raise VMError("OP_CHECKSIGADD: non-empty signature failed verification")
+
+    new_n = n + 1
+    vm.push(new_n.to_bytes((new_n.bit_length() + 7) // 8, "little"))
 
 
 @opcode(0xAE)

@@ -1,8 +1,8 @@
 import hashlib
 import logging
 
-from common import VMError, VM_TRUE, VM_FALSE, generate_p2pkh_script
-from crypto import hash160
+from common import VMError, VM_FALSE, generate_p2pkh_script, VM_TRUE
+from crypto import hash160, verify_sig, verify_schnorr
 from opcodes import opcode_2_op, OPCODE_FUNC_MAP
 from script import Script
 
@@ -24,6 +24,7 @@ class BitcoinScriptInterpreter:
         self.pc = 0
         self.terminated = False
         self.active_inner_vm = None  # P2SH/SegWit
+        self._pre_exec_stack = list(self.stack)  # Saved before scriptPubKey runs
 
     # ========== Tool functions ==========
 
@@ -100,9 +101,10 @@ class BitcoinScriptInterpreter:
             logging.info(
                 "\nPhase 1 (Fingerprint Verification) Passed, Preparing to Execute P2SH Phase 2!"
             )
-
-            redeem_script_bytes = self.pop()
-            self._execute_p2sh(redeem_script_bytes, self.stack, step_mode=True)
+            # Use the pre-execution snapshot: top item is the redeem script
+            redeem_script_bytes = self._pre_exec_stack[-1]
+            inner_stack = list(self._pre_exec_stack[:-1])
+            self._execute_p2sh(redeem_script_bytes, inner_stack, step_mode=True)
             self.terminated = False
 
     def execute(self) -> bool:
@@ -117,18 +119,20 @@ class BitcoinScriptInterpreter:
             return self._execute_witness_program()
 
         # Traditional legacy
-        while not self.terminated:
-            self.step()
+        try:
+            while not self.terminated:
+                self.step()
+        except VMError:
+            return False
 
         # Check if it's a P2SH transaction
         if self._is_valid() and self._is_p2sh_pattern():
             logging.info(
                 "\nPhase 1 (Fingerprint Verification) Passed, Preparing to Execute P2SH Phase 2!"
             )
-
-            redeem_script_bytes = self.pop()
-
-            return self._execute_p2sh(redeem_script_bytes, self.stack)
+            redeem_script_bytes = self._pre_exec_stack[-1]
+            inner_stack = list(self._pre_exec_stack[:-1])
+            return self._execute_p2sh(redeem_script_bytes, inner_stack)
 
         return self._is_valid()
 
@@ -142,16 +146,18 @@ class BitcoinScriptInterpreter:
         return res != b"" and res != VM_FALSE
 
     def _is_witness_program(self) -> bool:
-        """
-        Check if the scriptPubKey matches the SegWit pattern: 0x00 + 20 bytes/32 bytes
-        """
+        """Check if the scriptPubKey is a SegWit witness program (v0 or v1/P2TR)."""
         cmds = self.script.cmds
-        return (
-            len(cmds) == 2
-            and (cmds[0] == b"\x00" or cmds[0] == 0x00)
-            and isinstance(cmds[1], bytes)
-            and (len(cmds[1]) == 20 or len(cmds[1]) == 32)
-        )
+        if len(cmds) != 2 or not isinstance(cmds[1], bytes):
+            return False
+        # SegWit v0: OP_0 + 20 bytes (P2WPKH) or 32 bytes (P2WSH)
+        if (cmds[0] == b'\x00' or cmds[0] == 0x00) and len(cmds[1]) in (20, 32):
+            return True
+        # SegWit v1: OP_1 (0x51) + 32 bytes (P2TR)
+        if cmds[0] == 0x51 and len(cmds[1]) == 32:
+            return True
+        return False
+
 
     def _is_p2sh_pattern(self) -> bool:
         """
@@ -161,15 +167,18 @@ class BitcoinScriptInterpreter:
         # 0xA9 = OP_HASH160, 0x87 = OP_EQUAL
         return len(cmds) == 3 and cmds[0] == 0xA9 and cmds[2] == 0x87
 
-    # ========== Helper execute functions ==========
-
     def _execute_witness_program(self, step_mode: bool = False) -> bool:
-        """
-        Divide P2WPKH and P2WSH
-        """
+        """Dispatch to P2WPKH, P2WSH, or P2TR based on witness version and program length."""
         cmds = self.script.cmds
+        version = cmds[0]
         program = cmds[1]
 
+        if version == 0x51:
+            # SegWit v1 — P2TR (key-path spend)
+            logging.info("Executing P2TR...")
+            return self._execute_p2tr(program)
+
+        # SegWit v0
         if len(program) == 20:
             logging.info("Executing P2WPKH...")
             return self._execute_p2wpkh(program, step_mode)
@@ -234,8 +243,16 @@ class BitcoinScriptInterpreter:
 
         while not inner_vm.terminated:
             inner_vm.step()
-
         return inner_vm._is_valid()
+    
+    def _execute_p2tr(self, pubkey: bytes) -> bool:
+        """P2TR key-path spend (BIP341): directly verify the Schnorr signature."""
+        if len(self.witness) == 0:
+            raise VMError("P2TR requires at least 1 witness item (signature)")
+
+        sig = self.witness[0]
+        return verify_schnorr(pubkey, sig, self.tx_sig_hash)
+
 
     def _execute_p2sh(
         self, redeem_script_bytes: bytes, inner_stack: list, step_mode: bool = False
