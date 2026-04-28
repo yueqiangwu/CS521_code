@@ -2,6 +2,9 @@ VM_TRUE = b"\x01"
 VM_FALSE = b"\x00"
 
 
+TX_HASH_SIZE = 32
+
+
 class VMError(RuntimeError):
     def __init__(self, message):
         self.message = message
@@ -11,7 +14,9 @@ class VMError(RuntimeError):
 
 
 def generate_asm_script(templete: str, *items: bytes) -> str:
-    return templete.format(*(item.hex() for item in items))
+    return templete.format(
+        *(item.hex() if isinstance(item, bytes) else item for item in items)
+    )
 
 
 def generate_p2pkh_script(sig: bytes, pubkey: bytes, pubkey_hash: bytes) -> str:
@@ -24,4 +29,4 @@ def generate_p2pkh_script(sig: bytes, pubkey: bytes, pubkey_hash: bytes) -> str:
 
 
 def generate_segwit_p2pkh_script(pubkey_hash: bytes) -> str:
-    return generate_asm_script("0x00 <{}>", pubkey_hash)
+    return generate_asm_script("OP_0 <{}>", pubkey_hash)

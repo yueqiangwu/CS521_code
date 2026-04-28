@@ -1,3 +1,5 @@
+import re
+
 from opcodes import op_2_opcode
 
 
@@ -25,46 +27,51 @@ class Script:
         """
         Parse the input HEX/ASM string into a list of instructions
         """
-        raw_input = raw_input.strip()
-        if raw_input.startswith("OP_") or " " in raw_input:
-            return cls.parse_asm(raw_input)
+        # remove notes
+        lines = raw_input.split("\n")
+        cleaned_content = " ".join(line.split("#")[0].strip() for line in lines)
+        if not cleaned_content:
+            return cls([])
+
+        # Determine if it is ASM
+        if any(x in cleaned_content for x in ["OP_", " ", "{", "}"]):
+            return cls.parse_asm(cleaned_content)
         else:
-            return cls.parse_hex(raw_input)
+            return cls.parse_hex(cleaned_content)
 
     @classmethod
     def parse_asm(cls, raw_input: str):
-        if "," in raw_input:
-            raw_input = raw_input.replace(",", " ")
+        # Valid token: OP_xxx, <hex> / hex, {nested script}
+        pattern = r"\{.*?\}|<.*?>|OP_\w+|\S+"
+        tokens = re.findall(pattern, raw_input)
 
-        tokens = raw_input.split()
         cmds = []
 
         for token in tokens:
-            # data
-            if token.startswith("<") and token.endswith(">"):
-                hex_data = token[1:-1]
-
-                if len(hex_data) % 2 != 0:
+            # Handling nested ASM blocks
+            if token.startswith("{") and token.endswith("}"):
+                inner_asm = token[1:-1]
+                inner_script = cls.parse_asm(inner_asm)
+                cmds.append(inner_script.serialize())
+            # Handling data
+            elif token.startswith("<") and token.endswith(">"):
+                try:
+                    cmds.append(bytes.fromhex(token[1:-1]))
+                except ValueError:
                     raise ValueError(f"Invalid hex data: {token}")
-
-                data = bytes.fromhex(hex_data)
-                cmds.append(data)
-            # opcode
+            # Handling opcode
             elif token.startswith("OP_"):
                 opcode = op_2_opcode(token)
-                
                 if opcode is None:
                     raise ValueError(f"Unknown operation: {token}")
+
                 cmds.append(opcode)
             # other hex
             else:
                 try:
-                    if token.startswith(("0x", "0X")):
-                        hex_data = token[2:]
-                    data = bytes.fromhex(hex_data)
-                    cmds.append(data)
-                except:
-                    raise ValueError(f"Invalid token: {token}")
+                    cmds.append(bytes.fromhex(token))
+                except ValueError:
+                    raise ValueError(f"Invalid token in ASM: {token}")
 
         return cls(cmds)
 
@@ -72,6 +79,7 @@ class Script:
     def parse_hex(cls, raw_input: str):
         raw = bytes.fromhex(raw_input)
         length = len(raw)
+
         i = 0
         cmds = []
 
@@ -135,22 +143,20 @@ class Script:
 
         return cls(cmds)
 
-
     def serialize(self) -> bytes:
-
-            result = b""
-            for cmd in self.cmds:
-                if isinstance(cmd, int):
-                    result += bytes([cmd])
-                elif isinstance(cmd, bytes):
-                    length = len(cmd)
-                    if length < 0x4C:
-                        result += bytes([length])
-                    elif length <= 0xFF:
-                        result += bytes([0x4C, length])
-                    elif length <= 0xFFFF:
-                        result += bytes([0x4D]) + length.to_bytes(2, "little")
-                    else:
-                        result += bytes([0x4E]) + length.to_bytes(4, "little")
-                    result += cmd
-            return result
+        result = b""
+        for cmd in self.cmds:
+            if isinstance(cmd, int):
+                result += bytes([cmd])
+            elif isinstance(cmd, bytes):
+                length = len(cmd)
+                if length < 0x4C:
+                    result += bytes([length])
+                elif length <= 0xFF:
+                    result += bytes([0x4C, length])
+                elif length <= 0xFFFF:
+                    result += bytes([0x4D]) + length.to_bytes(2, "little")
+                else:
+                    result += bytes([0x4E]) + length.to_bytes(4, "little")
+                result += cmd
+        return result
