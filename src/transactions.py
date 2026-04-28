@@ -1,6 +1,6 @@
 from common import VMError
 from opcodes import op_2_opcode
-from crypto import hash160, sha256
+from crypto import hash160, sha256, aggregate_pubkeys
 from engine import BitcoinScriptInterpreter
 from script import Script
 import logging
@@ -53,6 +53,42 @@ def p2sh(signatures: list[bytes], redeem_script: Script, tx_sig_hash: bytes) -> 
         print(f"P2SH Execution failed with exception: {e}")
         return False
     
+
+def p2tr(sig: bytes, pubkeys: list[bytes], tx_sig_hash: bytes) -> bool:
+    """
+    P2TR key-path spend (BIP341 / Taproot).
+
+    pubkeys       : one or more 32-byte x-only public keys.
+                    Single key  → used directly as the scriptPubKey key.
+                    Multiple keys → MuSig-style aggregation via aggregate_pubkeys().
+    sig           : 64-byte Schnorr signature (or 65 bytes with sighash-type appended)
+    tx_sig_hash   : 32-byte BIP341 transaction signature hash
+    """
+    if len(pubkeys) == 1:
+        final_pubkey = pubkeys[0]
+    else:
+        final_pubkey = aggregate_pubkeys(pubkeys)
+
+    # scriptPubKey: OP_1 <32-byte-x-only-pubkey>
+    script_pubkey = Script([0x51, final_pubkey])
+
+    # Witness stack for key-path spend contains only the signature
+    witness_data = [sig]
+
+    vm = BitcoinScriptInterpreter(
+        script=script_pubkey,
+        witness=witness_data,
+        tx_sig_hash=tx_sig_hash,
+    )
+
+    try:
+        is_valid = vm.execute()
+        print(f"P2TR Validation Result: {is_valid}")
+        return is_valid
+    except Exception as e:
+        print(f"P2TR Execution failed with exception: {e}")
+        return False
+
 
 def p2wsh(signatures: list[bytes], witness_script: Script, tx_sig_hash: bytes) -> bool:
 
