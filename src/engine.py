@@ -24,6 +24,7 @@ class BitcoinScriptInterpreter:
         self.pc = 0
         self.terminated = False
         self.active_inner_vm = None  # P2SH/SegWit
+        self._pre_exec_stack = list(self.stack)  # Saved before scriptPubKey runs
 
     # ========== Tool functions ==========
 
@@ -100,9 +101,10 @@ class BitcoinScriptInterpreter:
             logging.info(
                 "\nPhase 1 (Fingerprint Verification) Passed, Preparing to Execute P2SH Phase 2!"
             )
-
-            redeem_script_bytes = self.pop()
-            self._execute_p2sh(redeem_script_bytes, self.stack, step_mode=True)
+            # Use the pre-execution snapshot: top item is the redeem script
+            redeem_script_bytes = self._pre_exec_stack[-1]
+            inner_stack = list(self._pre_exec_stack[:-1])
+            self._execute_p2sh(redeem_script_bytes, inner_stack, step_mode=True)
             self.terminated = False
 
     def execute(self) -> bool:
@@ -117,18 +119,20 @@ class BitcoinScriptInterpreter:
             return self._execute_witness_program()
 
         # Traditional legacy
-        while not self.terminated:
-            self.step()
+        try:
+            while not self.terminated:
+                self.step()
+        except VMError:
+            return False
 
         # Check if it's a P2SH transaction
         if self._is_valid() and self._is_p2sh_pattern():
             logging.info(
                 "\nPhase 1 (Fingerprint Verification) Passed, Preparing to Execute P2SH Phase 2!"
             )
-
-            redeem_script_bytes = self.pop()
-
-            return self._execute_p2sh(redeem_script_bytes, self.stack)
+            redeem_script_bytes = self._pre_exec_stack[-1]
+            inner_stack = list(self._pre_exec_stack[:-1])
+            return self._execute_p2sh(redeem_script_bytes, inner_stack)
 
         return self._is_valid()
 
@@ -239,7 +243,7 @@ class BitcoinScriptInterpreter:
 
         while not inner_vm.terminated:
             inner_vm.step()
-        return inner_vm.is_valid()
+        return inner_vm._is_valid()
     
     def _execute_p2tr(self, pubkey: bytes) -> bool:
         """P2TR key-path spend (BIP341): directly verify the Schnorr signature."""

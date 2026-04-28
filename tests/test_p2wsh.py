@@ -21,7 +21,7 @@ def test_p2wsh_multisig_function():
     )
 
     sig1 = bytes.fromhex(
-        "422d127175294489c288295b0c849955dd0b4baa533a3c3f17ff8eb2e4cf80b06c29a4e3999b3c5810eb02dbc46516367e27dad6accc8fa1b94d1fa03fe6944201"
+        "5f2e7c6aab160abcb2b88d98b9e038b6805bf74ebad8d9b9eb3468df22e8ab1b5f287f04e1d3d03205ae1eea91e732a194015765df74cb59b1fdf55eed1df27b01"
     )
 
     witness_asm = f"OP_1 <{pubkey1.hex()}> <{pubkey2.hex()}> OP_2 OP_CHECKMULTISIG"
