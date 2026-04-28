@@ -5,12 +5,18 @@ VM_FALSE = b"\x00"
 TX_HASH_SIZE = 32
 
 
-class VMError(RuntimeError):
-    def __init__(self, message):
+class VMError(Exception):
+    def __init__(self, message, status_code=400, payload=None):
+        super().__init__()
         self.message = message
+        self.status_code = status_code
+        self.payload = payload
 
-    def __str__(self):
-        return f"Transaction failed: {self.message}"
+    def to_dict(self):
+        rv = dict(self.payload or ())
+        rv["message"] = self.message
+        rv["status"] = "error"
+        return rv
 
 
 def generate_asm_script(templete: str, *items: bytes) -> str:

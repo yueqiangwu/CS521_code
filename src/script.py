@@ -1,5 +1,6 @@
 import re
 
+from common import VMError
 from opcodes import op_2_opcode
 
 
@@ -57,21 +58,21 @@ class Script:
             elif token.startswith("<") and token.endswith(">"):
                 try:
                     cmds.append(bytes.fromhex(token[1:-1]))
-                except ValueError:
-                    raise ValueError(f"Invalid hex data: {token}")
+                except VMError:
+                    raise VMError(f"Invalid hex data: {token}")
             # Handling opcode
             elif token.startswith("OP_"):
                 opcode = op_2_opcode(token)
                 if opcode is None:
-                    raise ValueError(f"Unknown operation: {token}")
+                    raise VMError(f"Unknown operation: {token}")
 
                 cmds.append(opcode)
             # other hex
             else:
                 try:
                     cmds.append(bytes.fromhex(token))
-                except ValueError:
-                    raise ValueError(f"Invalid token in ASM: {token}")
+                except VMError:
+                    raise VMError(f"Invalid token in ASM: {token}")
 
         return cls(cmds)
 
@@ -91,7 +92,7 @@ class Script:
             if 0x01 <= current <= 0x4B:
                 n = current
                 if i + n > length:
-                    raise ValueError("Out of range")
+                    raise VMError("Out of range")
 
                 data = raw[i : i + n]
                 cmds.append(data)
@@ -99,12 +100,12 @@ class Script:
             # OP_PUSHDATA1 (0x4c)
             elif current == 0x4C:
                 if i > length:
-                    raise ValueError("Missing length byte")
+                    raise VMError("Missing length byte")
                 n = raw[i]
                 i += 1
 
                 if i + n > length:
-                    raise ValueError("Out of range")
+                    raise VMError("Out of range")
 
                 data = raw[i : i + n]
                 cmds.append(data)
@@ -112,13 +113,13 @@ class Script:
             # OP_PUSHDATA2 (0x4d)
             elif current == 0x4D:
                 if i + 1 >= length:
-                    raise ValueError("Missing length byte")
+                    raise VMError("Missing length byte")
 
                 n = int.from_bytes(raw[i : i + 2], "little")
                 i += 2
 
                 if i + n > length:
-                    raise ValueError("Out of range")
+                    raise VMError("Out of range")
 
                 data = raw[i : i + n]
                 cmds.append(data)
@@ -126,13 +127,13 @@ class Script:
             # OP_PUSHDATA4 (0x4e)
             elif current == 0x4E:
                 if i + 3 >= length:
-                    raise ValueError("Missing length byte")
+                    raise VMError("Missing length byte")
 
                 n = int.from_bytes(raw[i : i + 4], "little")
                 i += 4
 
                 if i + n > length:
-                    raise ValueError("Out of range")
+                    raise VMError("Out of range")
 
                 data = raw[i : i + n]
                 cmds.append(data)

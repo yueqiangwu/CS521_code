@@ -3,11 +3,11 @@ import json
 import logging
 import os
 
-from common import TX_HASH_SIZE, generate_asm_script
-from crypto import hash160, sha256, generate_sig_pair
+from common import TX_HASH_SIZE
 from engine import BitcoinScriptInterpreter
 from script import Script
 from opcodes import opcode_2_op
+from templates import *
 from tkinter import messagebox, filedialog
 
 
@@ -172,9 +172,7 @@ class BitcoinIDE(ctk.CTk):
         self.clear_all()
         self.current_tx_hash = os.urandom(TX_HASH_SIZE)
 
-        pk, sig = generate_sig_pair(self.current_tx_hash)
-        scriptSig = generate_asm_script("<{}> # sig", sig)
-        scriptPubkey = generate_asm_script("<{}> # pubkey\nOP_CHECKSIG", pk)
+        scriptSig, scriptPubkey, _ = generate_p2pk_template(self.current_tx_hash)
 
         self.tx_hash_input.insert("1.0", self.current_tx_hash.hex())
         self.sig_input.insert("1.0", scriptSig)
@@ -188,12 +186,7 @@ class BitcoinIDE(ctk.CTk):
         self.clear_all()
         self.current_tx_hash = os.urandom(TX_HASH_SIZE)
 
-        pk, sig = generate_sig_pair(self.current_tx_hash)
-        pkh = hash160(pk)
-        scriptSig = generate_asm_script("<{}> # sig\n<{}> # pubkey", sig, pk)
-        scriptPubkey = generate_asm_script(
-            "OP_DUP\nOP_HASH160\n<{}> # pubkey hash\nOP_EQUALVERIFY\nOP_CHECKSIG", pkh
-        )
+        scriptSig, scriptPubkey, _ = generate_p2pkh_template(self.current_tx_hash)
 
         self.tx_hash_input.insert("1.0", self.current_tx_hash.hex())
         self.sig_input.insert("1.0", scriptSig)
@@ -207,22 +200,7 @@ class BitcoinIDE(ctk.CTk):
         self.clear_all()
         self.current_tx_hash = os.urandom(TX_HASH_SIZE)
 
-        pk1, sig1 = generate_sig_pair(self.current_tx_hash)
-        pk2, sig2 = generate_sig_pair(self.current_tx_hash)
-        redeem_script_asm = generate_asm_script(
-            "OP_2 <{}> <{}> OP_2 OP_CHECKMULTISIG", pk1, pk2
-        )
-        redeem_script_bytes = Script.parse(redeem_script_asm).serialize()
-        redeem_script_hash = hash160(redeem_script_bytes)
-        scriptSig = generate_asm_script(
-            "OP_0\n<{}>\n<{}> # sig1 sig2 ...\n{{{}}} # redeem script (pubkey1 pubkey2 ...)",
-            sig1,
-            sig2,
-            redeem_script_asm,
-        )
-        scriptPubkey = generate_asm_script(
-            "OP_HASH160\n<{}> # redeem script hash\nOP_EQUAL", redeem_script_hash
-        )
+        scriptSig, scriptPubkey, _ = generate_p2sh_template(self.current_tx_hash)
 
         self.tx_hash_input.insert("1.0", self.current_tx_hash.hex())
         self.sig_input.insert("1.0", scriptSig)
@@ -236,15 +214,9 @@ class BitcoinIDE(ctk.CTk):
         self.clear_all()
         self.current_tx_hash = os.urandom(TX_HASH_SIZE)
 
-        pk, sig = generate_sig_pair(self.current_tx_hash)
-        pkh = hash160(pk)
-
-        scriptSig = ""
-        scriptPubkey = generate_asm_script("OP_0\n<{}> # pubkey hash", pkh)
-        witness = generate_asm_script("<{}> # sig\n<{}> # pubkey", sig, pk)
+        _, scriptPubkey, witness = generate_p2wpkh_template(self.current_tx_hash)
 
         self.tx_hash_input.insert("1.0", self.current_tx_hash.hex())
-        self.sig_input.insert("1.0", scriptSig)
         self.pub_input.insert("1.0", scriptPubkey)
         self.witness_input.insert("1.0", witness)
 
@@ -256,21 +228,9 @@ class BitcoinIDE(ctk.CTk):
         self.reset()
         self.current_tx_hash = os.urandom(TX_HASH_SIZE)
 
-        pk, sig = generate_sig_pair(self.current_tx_hash)
-        witness_script_asm = generate_asm_script("<{}> # pubkey\nOP_CHECKSIG", pk)
-        witness_script_bytes = Script.parse(witness_script_asm).serialize()
-        witness_script_hash = sha256(witness_script_bytes)
-
-        scriptSig = ""
-        scriptPubkey = generate_asm_script(
-            "OP_0\n<{}> # witness script hash", witness_script_hash
-        )
-        witness = generate_asm_script(
-            "<{}> # sig\n{{{}}} # witness script", sig, witness_script_asm
-        )
+        _, scriptPubkey, witness = generate_p2wsh_template(self.current_tx_hash)
 
         self.tx_hash_input.insert("1.0", self.current_tx_hash.hex())
-        self.sig_input.insert("1.0", scriptSig)
         self.pub_input.insert("1.0", scriptPubkey)
         self.witness_input.insert("1.0", witness)
 

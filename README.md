@@ -10,29 +10,24 @@ Coding project: Build a Bitcoin Script interpreter that parses and executes stan
 
 ### Overview
 
-A simple Bitcoin Script Interpreter based on Python
+A simple Bitcoin Script Interpreter based on Python flask backend & React frontend
 
 ### Structure
 
 ```
 bitcoin_script_interpreter/
 ├── src/
-│   ├── __init__.py
+│   ├── frontend/          # Frontend related files
+│   ├── app.py             # Backend flask server
 │   ├── common.py          # Useful definitions
 │   ├── crypto.py          # Cryptographic helper functions (Hash160, ECDSA verification)
 │   ├── engine.py          # Core Virtual Machine (VM) logic
-│   ├── main.py            # Project entry point: Demonstrates the execution process
+│   ├── main.py            # Tkinter UI entry point
 │   ├── opcodes.py         # Definitions for all opcode functions
 │   ├── script.py          # Script parser: Converts ASM/HEX to a list of instructions
 │   ├── transactions.py    # Dealing with different transactions
 │   └── ui.py              # Simple user interface
-├── tests/
-│   ├── __init__.py
-│   ├── test_p2pk.py       # P2PK test cases
-│   ├── test_p2pkh.py      # P2PKH test cases
-│   ├── test_p2sh.py       # P2SH test cases
-│   ├── test_p2wpkh.py     # P2WPKH test cases
-│   ├── test_p2wsh.py      # P2WSH test cases
+├── tests/                 # PyTest related files
 ├── requirements.txt       # Dependencies (ecdsa, hashlib, etc.)
 └── README.md
 ```
@@ -41,8 +36,14 @@ bitcoin_script_interpreter/
 
 1. Clone repository `git clone https://github.com/yueqiangwu/CS521_code.git`
 
-2. Install dependencies `pip install -r requirements.txt`
+2. Install backend dependencies `pip install -r requirements.txt`
 
-3. Run `python3 src/main.py` to show user interface
+3. For Tkinter UI, run `python3 src/main.py`
 
-4. Run all tests `pytest -s tests/`
+4. For web UI, run `python3 src/app.py` to launch flask server
+
+5. Install frontend dependencies `cd src/frontend` `npm install`
+
+6. Then run `npm run start` to launch frontend
+
+7. For PyTest, use `pytest -s tests/` to run all tests

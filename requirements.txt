@@ -1,10 +1,17 @@
+blinker @ file:///home/conda/feedstock_root/build_artifacts/blinker_1731096409132/work
+click @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_click_1777219902/work
 colorama @ file:///home/conda/feedstock_root/build_artifacts/colorama_1733218098505/work
 customtkinter @ file:///opt/conda/conda-bld/customtkinter_1704857282683/work
 darkdetect @ file:///home/conda/feedstock_root/build_artifacts/darkdetect_1734328074983/work
 ecdsa @ file:///home/conda/feedstock_root/build_artifacts/ecdsa_1774556716531/work
 exceptiongroup @ file:///home/conda/feedstock_root/build_artifacts/exceptiongroup_1763918002538/work
+Flask @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_flask_1771489274/work
+Flask-Cors @ file:///home/conda/feedstock_root/build_artifacts/flask_cors_1718399065232/work
 gmpy2 @ file:///home/conda/feedstock_root/build_artifacts/gmpy2_1773244936308/work
 iniconfig @ file:///home/conda/feedstock_root/build_artifacts/iniconfig_1760831328738/work
+itsdangerous @ file:///home/conda/feedstock_root/build_artifacts/itsdangerous_1733308265247/work
+Jinja2 @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_jinja2_1764517220/work
+MarkupSafe @ file:///home/conda/feedstock_root/build_artifacts/markupsafe_1772444934960/work
 packaging @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_packaging_1769093650/work
 pluggy @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_pluggy_1764896838/work
 Pygments @ file:///home/conda/feedstock_root/build_artifacts/pygments_1774796700044/work
@@ -12,3 +19,4 @@ pytest @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_pyt
 six @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_six_1753199211/work
 tomli @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_tomli_1774492402/work
 typing_extensions @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_typing_extensions_1756220668/work
+Werkzeug @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_werkzeug_1775160081/work
