@@ -153,8 +153,6 @@ def op_checkmultisig(vm: "BitcoinScriptInterpreter"):
         signatures.append(vm.pop())
     signatures.reverse()
 
-    _dummy = vm.pop()
-
     success = verify_multisig(pubkeys, signatures, vm.tx_sig_hash)
 
     if success:
