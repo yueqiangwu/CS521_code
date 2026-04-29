@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Input, Button, Card, Typography, Space } from 'antd';
 import {
   ClearOutlined,
+  SwapOutlined,
 } from '@ant-design/icons';
 
 import {
@@ -21,8 +22,6 @@ export default function Tool({ txHash }) {
     try {
       const data = await getUtilsString(inputText, mode);
       setResult(data.result);
-      setSig("");
-      setPubKey("")
     } catch (err) {
       console.error(err);
     }
@@ -31,7 +30,6 @@ export default function Tool({ txHash }) {
   const runGenerateSig = async () => {
     try {
       const data = await getUtilsSig(txHash);
-      setResult("");
       setSig(data.sig);
       setPubKey(data.pubKey)
     } catch (err) {
@@ -55,9 +53,22 @@ export default function Tool({ txHash }) {
     await runTransform("hex2str");
   }
 
+  const handleAsm2Hex = async () => {
+    await runTransform("asm2hex");
+  }
+
+  const handleHex2Asm = async () => {
+    await runTransform("hex2asm");
+  }
+
   const handleClearText = () => {
     setInputText("");
     setResult("");
+  };
+
+  const handleSwapText = () => {
+    setInputText(result);
+    setResult(inputText);
   };
 
   const handleClearSig = () => {
@@ -74,7 +85,10 @@ export default function Tool({ txHash }) {
           <Button size="small" onClick={handleHash160}>Hash160</Button>
           <Button size="small" onClick={handleStr2Hex}>Str 2 Hex</Button>
           <Button size="small" onClick={handleHex2Str}>Hex 2 Str</Button>
+          <Button size="small" onClick={handleAsm2Hex}>Asm 2 Hex</Button>
+          <Button size="small" onClick={handleHex2Asm}>Hex 2 Asm</Button>
           <Button size="small" icon={<ClearOutlined />} onClick={handleClearText} />
+          <Button size="small" icon={<SwapOutlined />} onClick={handleSwapText} />
         </Space>
         {result && <Text copyable code>{result}</Text>}
 

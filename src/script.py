@@ -35,7 +35,7 @@ class Script:
             return cls([])
 
         # Determine if it is ASM
-        if any(x in cleaned_content for x in ["OP_", " ", "{", "}"]):
+        if any(x in cleaned_content for x in ["OP_", " ", "{", "}", "<", ">", "#"]):
             return cls.parse_asm(cleaned_content)
         else:
             return cls.parse_hex(cleaned_content)
@@ -58,10 +58,10 @@ class Script:
             elif token.startswith("<") and token.endswith(">"):
                 try:
                     cmds.append(bytes.fromhex(token[1:-1]))
-                except VMError:
+                except Exception:
                     raise VMError(f"Invalid hex data: {token}")
             # Handling opcode
-            elif token.startswith("OP_"):
+            elif token.upper().startswith("OP_"):
                 opcode = op_2_opcode(token)
                 if opcode is None:
                     raise VMError(f"Unknown operation: {token}")
@@ -71,16 +71,19 @@ class Script:
             else:
                 try:
                     cmds.append(bytes.fromhex(token))
-                except VMError:
+                except Exception:
                     raise VMError(f"Invalid token in ASM: {token}")
 
         return cls(cmds)
 
     @classmethod
     def parse_hex(cls, raw_input: str):
-        raw = bytes.fromhex(raw_input)
-        length = len(raw)
+        try:
+            raw = bytes.fromhex(raw_input)
+        except Exception:
+            raise VMError("Invalid hex string")
 
+        length = len(raw)
         i = 0
         cmds = []
 

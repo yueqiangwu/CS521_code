@@ -2,13 +2,14 @@ import uuid
 import os
 import logging
 
+from cachetools import TTLCache
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.exceptions import HTTPException
 
 from common import TX_HASH_SIZE, VMError
 from crypto import hash160, sha256, generate_sig_pair
-from engine import BitcoinScriptInterpreter
+from engine_v2 import BitcoinScriptInterpreterV2
 from opcodes import opcode_2_op
 from script import Script
 from templates import generate_template
@@ -37,7 +38,8 @@ def handle_exception(e):
     return jsonify({"message": str(e), "status": "error"}), 500
 
 
-sessions: dict[str, BitcoinScriptInterpreter] = {}
+# sessions: dict[str, BitcoinScriptInterpreterV2] = {}
+sessions = TTLCache(maxsize=5000, ttl=30 * 60)
 
 
 @app.route("/api/init", methods=["POST"])
@@ -56,7 +58,7 @@ def get_templates_options():
     """
     Return template options
     """
-    templates_options: list[str] = ["P2PK", "P2PKH", "P2SH", "P2WPKH", "P2WSH"]
+    templates_options: list[str] = ["P2PK", "P2PKH", "P2SH", "P2WPKH", "P2WSH", "P2TR"]
 
     return jsonify({"templatesOptions": templates_options})
 
@@ -106,72 +108,80 @@ def step_vm():
         # reset
         case -10:
             if vm is None:
-                vm = BitcoinScriptInterpreter(
-                    Script.parse(f"{scriptSig}\n{scriptPubkey}"),
-                    [],
-                    Script.parse(witness).cmds,
+                vm = BitcoinScriptInterpreterV2(
                     tx_hash_bytes,
+                    Script.parse(scriptSig),
+                    Script.parse(scriptPubkey),
+                    Script.parse(witness),
                 )
             else:
-                vm = BitcoinScriptInterpreter(vm.script, [], vm.witness, vm.tx_sig_hash)
+                vm = BitcoinScriptInterpreterV2(
+                    vm.tx_sig_hash, vm.script_sig, vm.script_pubkey, vm.witness
+                )
             sessions[sid] = vm
         # step back
         case -1:
             if vm is None:
-                vm = BitcoinScriptInterpreter(
-                    Script.parse(f"{scriptSig}\n{scriptPubkey}"),
-                    [],
-                    Script.parse(witness).cmds,
+                vm = BitcoinScriptInterpreterV2(
                     tx_hash_bytes,
+                    Script.parse(scriptSig),
+                    Script.parse(scriptPubkey),
+                    Script.parse(witness),
                 )
                 sessions[sid] = vm
             else:
                 current_pc = vm.pc
                 if current_pc != 0:
-                    vm = BitcoinScriptInterpreter(
-                        vm.script, [], vm.witness, vm.tx_sig_hash
+                    vm = BitcoinScriptInterpreterV2(
+                        vm.tx_sig_hash, vm.script_sig, vm.script_pubkey, vm.witness
                     )
-                    for _ in range(current_pc - 1):
+                    while vm.pc < current_pc - 1:
                         vm.step()
                     sessions[sid] = vm
         # step over
         case 1:
             if vm is None:
-                vm = BitcoinScriptInterpreter(
-                    Script.parse(f"{scriptSig}\n{scriptPubkey}"),
-                    [],
-                    Script.parse(witness).cmds,
+                vm = BitcoinScriptInterpreterV2(
                     tx_hash_bytes,
+                    Script.parse(scriptSig),
+                    Script.parse(scriptPubkey),
+                    Script.parse(witness),
                 )
                 sessions[sid] = vm
-            vm.step()
+            # initialize also counts as one step
+            else:
+                vm.step()
         # run all
         case 10:
             if vm is None:
-                vm = BitcoinScriptInterpreter(
-                    Script.parse(f"{scriptSig}\n{scriptPubkey}"),
-                    [],
-                    Script.parse(witness).cmds,
+                vm = BitcoinScriptInterpreterV2(
                     tx_hash_bytes,
+                    Script.parse(scriptSig),
+                    Script.parse(scriptPubkey),
+                    Script.parse(witness),
                 )
                 sessions[sid] = vm
-            while not vm.terminated:
+            while not vm.is_terminated:
                 vm.step()
         case _:
             raise ValueError(f"Unknown mode: {mode}")
 
-    active_vm = vm.active_inner_vm if vm.active_inner_vm else vm
     instructions = []
-    for cmd in active_vm.script.cmds:
-        instructions.append(opcode_2_op(cmd) if isinstance(cmd, int) else cmd.hex())
-    stack = [x.hex() if isinstance(x, bytes) else str(x) for x in active_vm.stack]
+    for cmd, instr_type in zip(vm.instructions, vm.instr_types):
+        instructions.append(
+            {
+                "instr": opcode_2_op(cmd) if isinstance(cmd, int) else cmd.hex(),
+                "instrType": instr_type.value,
+            }
+        )
+    stack = [x.hex() if isinstance(x, bytes) else str(x) for x in vm.stack]
 
     return jsonify(
         {
-            "pc": active_vm.pc,
-            "isInner": vm.active_inner_vm is not None,
-            "isTerminated": vm.terminated,
-            "isValid": vm._is_valid() if vm.terminated else None,
+            "transType": vm.trans_type.value,
+            "pc": vm.pc,
+            "isTerminated": vm.is_terminated,
+            "isValid": vm.is_valid() if vm.is_terminated else None,
             "instructions": instructions,
             "stack": stack,
         }
@@ -220,7 +230,22 @@ def util_string():
                 input_text_bytes = bytes.fromhex(input_text)
             except Exception:
                 raise VMError(f"Invalid hex string: {input_text}", status_code=401)
-            res = input_text_bytes.decode()
+            try:
+                res = input_text_bytes.decode()
+            except Exception:
+                raise VMError(
+                    f"Hex string cannot be decoded: {input_text}", status_code=401
+                )
+        case "asm2hex":
+            res = Script.parse(input_text).serialize().hex()
+        case "hex2asm":
+            cmds = Script.parse_hex(input_text).cmds
+            instructions = []
+            for cmd in cmds:
+                instructions.append(
+                    opcode_2_op(cmd) if isinstance(cmd, int) else cmd.hex()
+                )
+            res = "\n".join(instructions)
         case _:
             raise ValueError(f"Unknown mode: {mode}")
 
@@ -244,5 +269,5 @@ def util_sig():
 
 
 if __name__ == "__main__":
-    # app.run(debug=True, port=5000)
-    app.run(debug=False, port=5000)
+    app.run(debug=True, port=5000)
+    # app.run(debug=False, port=5000)

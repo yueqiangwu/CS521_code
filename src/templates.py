@@ -18,6 +18,8 @@ def generate_template(transaction_type: str, tx_hash: bytes) -> tuple[str, str, 
             return generate_p2wpkh_template(tx_hash)
         case "P2WSH":
             return generate_p2wsh_template(tx_hash)
+        case "P2TR":
+            return generate_p2tr_template(tx_hash)
         case _:
             raise ValueError(f"Unknown transaction type: {transaction_type}")
 
@@ -53,7 +55,7 @@ def generate_p2sh_template(tx_hash: bytes) -> tuple[str, str, str]:
     redeem_script_hash = hash160(redeem_script_bytes)
 
     scriptSig = generate_asm_script(
-        "OP_0\n<{}>\n<{}> # sig1 sig2 ...\n{{{}}} # redeem script (pubkey1 pubkey2 ...)",
+        "<{}>\n<{}> # sig1 sig2 ...\n{{{}}} # redeem script (pubkey1 pubkey2 ...)",
         sig1,
         sig2,
         redeem_script_asm,
@@ -83,6 +85,22 @@ def generate_p2wsh_template(tx_hash: bytes) -> tuple[str, str, str]:
 
     scriptPubkey = generate_asm_script(
         "OP_0\n<{}> # witness script hash", witness_script_hash
+    )
+    witness = generate_asm_script(
+        "<{}> # sig\n{{{}}} # witness script", sig, witness_script_asm
+    )
+
+    return ("", scriptPubkey, witness)
+
+
+def generate_p2tr_template(tx_hash: bytes) -> tuple[str, str, str]:
+    pk, sig = generate_sig_pair(tx_hash)
+    witness_script_asm = generate_asm_script("<{}> # pubkey\nOP_CHECKSIG", pk)
+    witness_script_bytes = Script.parse(witness_script_asm).serialize()
+    witness_script_hash = sha256(witness_script_bytes)
+
+    scriptPubkey = generate_asm_script(
+        "OP_1\n<{}> # witness script hash", witness_script_hash
     )
     witness = generate_asm_script(
         "<{}> # sig\n{{{}}} # witness script", sig, witness_script_asm

@@ -1,8 +1,8 @@
 import hashlib
-import logging
 from ecdsa import VerifyingKey, SECP256k1, SigningKey
 from ecdsa.ecdsa import curve_secp256k1, generator_secp256k1
 from ecdsa.ellipticcurve import INFINITY, PointJacobi
+
 
 def hash160(data: bytes) -> bytes:
     sha2 = hashlib.sha256(data).digest()
@@ -44,6 +44,7 @@ def verify_multisig(pubkeys: list[bytes], sigs: list[bytes], sighash: bytes) -> 
 
 
 # --- BIP340 Schnorr signature verification ---
+
 
 def _tagged_hash(tag: str, data: bytes) -> bytes:
     """BIP340 tagged hash: SHA256(SHA256(tag) || SHA256(tag) || data)"""
@@ -130,9 +131,12 @@ def verify_schnorr(pubkey: bytes, sig: bytes, msg: bytes) -> bool:
 
         P_point = PointJacobi(curve_secp256k1, coords[0], coords[1], 1, n)
 
-        e = int.from_bytes(
-            _tagged_hash("BIP0340/challenge", raw_sig[:32] + pubkey + msg), "big"
-        ) % n
+        e = (
+            int.from_bytes(
+                _tagged_hash("BIP0340/challenge", raw_sig[:32] + pubkey + msg), "big"
+            )
+            % n
+        )
 
         # R = s*G - e*P  ≡  s*G + (n-e)*P
         R = s * G + ((n - e) % n) * P_point

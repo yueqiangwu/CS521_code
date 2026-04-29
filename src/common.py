@@ -1,3 +1,5 @@
+from enum import Enum
+
 VM_TRUE = b"\x01"
 VM_FALSE = b"\x00"
 
@@ -17,6 +19,25 @@ class VMError(Exception):
         rv["message"] = self.message
         rv["status"] = "error"
         return rv
+
+
+class TransactionType(Enum):
+    LEGACY = 0
+    P2PK = 1
+    P2PKH = 2
+    P2SH = 3
+    P2WPKH = 4
+    P2WSH = 5
+    P2TR = 6
+
+
+class InstructionType(Enum):
+    DISABLED = 0
+    SIG = 1
+    PUBKEY = 2
+    REDEEM = 3
+    WITNESS = 4
+    WITNESS_ARG = 5
 
 
 def generate_asm_script(templete: str, *items: bytes) -> str:
