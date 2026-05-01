@@ -72,6 +72,10 @@ def _p2wsh_multisig(m: int, signers: list[str]) -> tuple[Script, bytes]:
     sp       = Script.parse(f"OP_0 <{sh.hex()}>")
     return sp, ws_bytes
 
+def _bip143_script_code_p2wpkh(pubkey_hash: bytes) -> bytes:
+    """BIP143 scriptCode for P2WPKH: the equivalent P2PKH script."""
+    return bytes([0x76, 0xa9, 0x14]) + pubkey_hash + bytes([0x88, 0xac])
+
 SCRIPT_FACTORIES = {"P2PKH": _p2pkh, "P2WPKH": _p2wpkh}
 
 
@@ -79,11 +83,14 @@ SCRIPT_FACTORIES = {"P2PKH": _p2pkh, "P2WPKH": _p2wpkh}
 
 def _script_type(sp: Script) -> str:
     c = sp.cmds
-    if len(c) == 5 and c[0] == 0x76:                              return "P2PKH"
-    if len(c) == 2 and c[0] == 0x00 and isinstance(c[1], bytes):
+    if len(c) == 5 and c[0] == 0x76:
+        return "P2PKH"
+    if len(c) == 2 and (c[0] == 0x00 or c[0] == b'\x00') and isinstance(c[1], bytes):
         return "P2WPKH" if len(c[1]) == 20 else "P2WSH"
-    if len(c) == 2 and c[0] == 0x51:                              return "P2TR"
-    if len(c) == 3 and c[0] == 0xA9:                              return "P2SH"
+    if len(c) == 2 and c[0] == 0x51:
+        return "P2TR"
+    if len(c) == 3 and c[0] == 0xA9 and isinstance(c[1], bytes):
+        return "P2SH"
     return "Custom"
 
 def _owner(sp: Script) -> str:
@@ -129,7 +136,7 @@ def _utxo_dict(u: UTXO) -> dict:
         if len(c) == 3 and isinstance(c[1], bytes):
             sh = c[1].hex()
             if sh in multisig_info:
-                d["multisig"] = multisig_info[sh]   # {m, n, signers}
+                d["multisig"] = multisig_info[sh]   # {m, n, signers[, subtype]}
     elif stype == "P2WSH":
         c = u.script_pubkey.cmds
         if len(c) == 2 and isinstance(c[1], bytes):
@@ -230,7 +237,7 @@ def api_create_multisig():
         sh_hex = sha256(ws_bytes).hex()
         witness_scripts[sh_hex]     = ws_bytes
         witness_script_info[sh_hex] = {"m": m, "n": len(signers), "signers": signers}
-    else:
+    else:  # P2SH
         sp, rs_bytes = _p2sh_multisig(m, signers)
         sh_hex = hash160(rs_bytes).hex()
         redeem_scripts[sh_hex] = rs_bytes
@@ -271,7 +278,9 @@ def api_transact():
             input_utxos.append(utxo)
 
         # ── Build outputs ─────────────────────────────────────────────────
-        tx_outputs = []
+        tx_outputs      = []
+        tx_output_metas = []   # parallel: multisig info dict or None per output
+
         for i, out in enumerate(body.get("outputs", [])):
             amount      = int(out["amount"])
             script_type = out.get("script_type", "P2PKH")
@@ -280,7 +289,7 @@ def api_transact():
                                 "error": f"Output {i}: amount must be positive"})
 
             if script_type in ("P2SH", "P2WSH"):
-                # Multisig output (P2SH or P2WSH)
+                # Multisig output
                 out_m       = int(out.get("m", 2))
                 out_signers = out.get("multisig_signers", [])
                 if len(out_signers) < 2:
@@ -290,21 +299,19 @@ def api_transact():
                 if unknown:
                     return jsonify({"success": False,
                                     "error": f"Output {i}: unknown signers {unknown}"})
+                ms_meta = {"m": out_m, "n": len(out_signers), "signers": out_signers}
                 if script_type == "P2WSH":
                     sp, ws_bytes = _p2wsh_multisig(out_m, out_signers)
                     sh_hex = sha256(ws_bytes).hex()
                     witness_scripts[sh_hex]     = ws_bytes
-                    witness_script_info[sh_hex] = {
-                        "m": out_m, "n": len(out_signers), "signers": out_signers
-                    }
-                else:
+                    witness_script_info[sh_hex] = ms_meta
+                else:  # P2SH
                     sp, rs_bytes = _p2sh_multisig(out_m, out_signers)
                     sh_hex = hash160(rs_bytes).hex()
                     redeem_scripts[sh_hex] = rs_bytes
-                    multisig_info[sh_hex]  = {
-                        "m": out_m, "n": len(out_signers), "signers": out_signers
-                    }
+                    multisig_info[sh_hex]  = ms_meta
                 tx_outputs.append(TxOutput(amount=amount, script_pubkey=sp))
+                tx_output_metas.append(ms_meta)
             else:
                 recipient = out.get("recipient", "")
                 if recipient not in ACCOUNTS:
@@ -313,6 +320,7 @@ def api_transact():
                 pk     = bytes.fromhex(ACCOUNTS[recipient]["pubkey"])
                 script = SCRIPT_FACTORIES.get(script_type, _p2pkh)(pk)
                 tx_outputs.append(TxOutput(amount=amount, script_pubkey=script))
+                tx_output_metas.append(None)
 
         if not tx_inputs:
             return jsonify({"success": False, "error": "No inputs provided"})
@@ -322,41 +330,38 @@ def api_transact():
         tx = Transaction(inputs=tx_inputs, outputs=tx_outputs)
 
         # ── Sign each input ───────────────────────────────────────────────
+        def _multisig_sigs(info: dict, sig_hash: bytes) -> list[bytes]:
+            return [
+                SigningKey.from_string(
+                    ACCOUNTS[s]["privkey_int"].to_bytes(32, "big"), curve=SECP256k1
+                ).sign_digest(sig_hash) + b"\x01"
+                for s in info["signers"][: info["m"]]
+            ]
+
         for i, (inp, utxo) in enumerate(zip(tx.inputs, input_utxos)):
-            sig_hash = tx.sighash(i, utxo.script_pubkey)
-            stype    = _script_type(utxo.script_pubkey)
+            stype = _script_type(utxo.script_pubkey)
 
             if stype == "P2SH":
-                # Collect M signatures from the registered co-signers
                 sh       = utxo.script_pubkey.cmds[1].hex()
                 rs_bytes = redeem_scripts.get(sh)
                 info     = multisig_info.get(sh)
                 if not rs_bytes or not info:
                     return jsonify({"success": False,
                                     "error": f"Input {i}: P2SH redeem script not registered"})
-                sigs = []
-                for signer in info["signers"][:info["m"]]:
-                    sk_s = SigningKey.from_string(
-                               ACCOUNTS[signer]["privkey_int"].to_bytes(32, "big"),
-                               curve=SECP256k1)
-                    sigs.append(sk_s.sign_digest(sig_hash) + b"\x01")
-                inp.script_sig = [b""] + sigs + [rs_bytes]
+                # legacy sighash for regular P2SH
+                sh_hash  = tx.sighash(i, utxo.script_pubkey)
+                inp.script_sig = [b""] + _multisig_sigs(info, sh_hash) + [rs_bytes]
 
             elif stype == "P2WSH":
-                # P2WSH multisig: witness = [OP_0 dummy, sig1, …, witness_script]
                 sh       = utxo.script_pubkey.cmds[1].hex()
                 ws_bytes = witness_scripts.get(sh)
                 info     = witness_script_info.get(sh)
                 if not ws_bytes or not info:
                     return jsonify({"success": False,
                                     "error": f"Input {i}: P2WSH witness script not registered"})
-                sigs = []
-                for signer in info["signers"][:info["m"]]:
-                    sk_s = SigningKey.from_string(
-                               ACCOUNTS[signer]["privkey_int"].to_bytes(32, "big"),
-                               curve=SECP256k1)
-                    sigs.append(sk_s.sign_digest(sig_hash) + b"\x01")
-                inp.witness = [b""] + sigs + [ws_bytes]
+                # BIP143: scriptCode = witnessScript
+                bip143_hash = tx.sighash_segwit(i, ws_bytes, utxo.amount)
+                inp.witness = [b""] + _multisig_sigs(info, bip143_hash) + [ws_bytes]
 
             elif stype == "P2WPKH":
                 owner = _owner(utxo.script_pubkey)
@@ -367,17 +372,22 @@ def api_transact():
                              ACCOUNTS[owner]["privkey_int"].to_bytes(32, "big"),
                              curve=SECP256k1)
                 pubkey = sk.get_verifying_key().to_string()
-                inp.witness = [sk.sign_digest(sig_hash) + b"\x01", pubkey]
+                # BIP143: scriptCode = P2PKH equivalent
+                h           = utxo.script_pubkey.cmds[1]   # 20-byte hash
+                script_code = _bip143_script_code_p2wpkh(h)
+                bip143_hash = tx.sighash_segwit(i, script_code, utxo.amount)
+                inp.witness = [sk.sign_digest(bip143_hash) + b"\x01", pubkey]
 
             elif stype == "P2TR":
                 owner = _owner(utxo.script_pubkey)
                 if owner not in ACCOUNTS:
                     return jsonify({"success": False,
                                     "error": f"Input {i}: cannot identify P2TR owner"})
-                sk = SigningKey.from_string(
-                         ACCOUNTS[owner]["privkey_int"].to_bytes(32, "big"),
-                         curve=SECP256k1)
-                inp.witness = [sk.sign_digest(sig_hash) + b"\x01"]
+                sk       = SigningKey.from_string(
+                               ACCOUNTS[owner]["privkey_int"].to_bytes(32, "big"),
+                               curve=SECP256k1)
+                sh_hash  = tx.sighash(i, utxo.script_pubkey)
+                inp.witness = [sk.sign_digest(sh_hash) + b"\x01"]
 
             else:   # P2PKH / legacy
                 owner = _owner(utxo.script_pubkey)
@@ -388,7 +398,8 @@ def api_transact():
                               ACCOUNTS[owner]["privkey_int"].to_bytes(32, "big"),
                               curve=SECP256k1)
                 pubkey  = sk.get_verifying_key().to_string()
-                inp.script_sig = [sk.sign_digest(sig_hash) + b"\x01", pubkey]
+                sh_hash = tx.sighash(i, utxo.script_pubkey)
+                inp.script_sig = [sk.sign_digest(sh_hash) + b"\x01", pubkey]
 
         # ── Validate & apply ──────────────────────────────────────────────
         ok, msg = utxo_set.validate_and_apply(tx)
@@ -396,18 +407,28 @@ def api_transact():
         total_in  = sum(u.amount for u in input_utxos)
         total_out = sum(o.amount for o in tx_outputs)
 
+        def _out_record(o: TxOutput, meta: dict | None) -> dict:
+            stype = _script_type(o.script_pubkey)
+            d = {"amount": o.amount, "recipient": _owner(o.script_pubkey),
+                 "script_type": stype}
+            if meta:
+                d["multisig"] = meta
+            return d
+
         def _inp_label(u):
             stype = _script_type(u.script_pubkey)
             if stype == "P2SH":
-                c = u.script_pubkey.cmds
-                sh = c[1].hex() if isinstance(c[1], bytes) else ""
+                c    = u.script_pubkey.cmds
+                sh   = c[1].hex() if isinstance(c[1], bytes) else ""
                 info = multisig_info.get(sh, {})
-                return f"{info.get('m','?')}-of-{info.get('n','?')} P2SH ({', '.join(info.get('signers',[]))})"
+                return (f"{info.get('m','?')}-of-{info.get('n','?')} {stype} "
+                        f"({', '.join(info.get('signers',[]))})")
             if stype == "P2WSH":
-                c = u.script_pubkey.cmds
-                sh = c[1].hex() if isinstance(c[1], bytes) else ""
+                c    = u.script_pubkey.cmds
+                sh   = c[1].hex() if isinstance(c[1], bytes) else ""
                 info = witness_script_info.get(sh, {})
-                return f"{info.get('m','?')}-of-{info.get('n','?')} P2WSH ({', '.join(info.get('signers',[]))})"
+                return (f"{info.get('m','?')}-of-{info.get('n','?')} P2WSH "
+                        f"({', '.join(info.get('signers',[]))})")
             return _owner(u.script_pubkey)
 
         record = {
@@ -426,12 +447,7 @@ def api_transact():
                  "type":       _script_type(u.script_pubkey)}
                 for u in input_utxos
             ],
-            "outputs": [
-                {"amount":      o.amount,
-                 "recipient":   _owner(o.script_pubkey),
-                 "script_type": _script_type(o.script_pubkey)}
-                for o in tx_outputs
-            ],
+            "outputs": [_out_record(o, m) for o, m in zip(tx_outputs, tx_output_metas)],
         }
         if ok:
             tx_history.append(record)
