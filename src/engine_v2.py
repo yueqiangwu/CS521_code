@@ -132,7 +132,7 @@ class BitcoinScriptInterpreterV2:
         if sha256(witness_script_bytes) != script_hash:
             raise VMError("P2WSH script hash mismatch")
 
-        witness_script = Script.parse(witness_script_bytes.hex())
+        witness_script = Script.parse_hex(witness_script_bytes.hex())
 
         # Execute the witness script with the args as the initial stack
         self.pc = 2
@@ -160,7 +160,7 @@ class BitcoinScriptInterpreterV2:
         if sha256(witness_script_bytes) != script_hash:
             raise VMError("P2WSH script hash mismatch")
 
-        witness_script = Script.parse(witness_script_bytes.hex())
+        witness_script = Script.parse_hex(witness_script_bytes.hex())
 
         sig = args[0]
         pubkey = witness_script.cmds[0]
@@ -179,7 +179,7 @@ class BitcoinScriptInterpreterV2:
         redeem_script_bytes = self.script_sig.cmds[-1]
         args = self.script_sig.cmds
 
-        redeem_script = Script.parse(redeem_script_bytes.hex())
+        redeem_script = Script.parse_hex(redeem_script_bytes.hex())
 
         self.instructions.extend(args)
         self.instructions.extend(self.script_pubkey.cmds)

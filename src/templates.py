@@ -49,13 +49,13 @@ def generate_p2sh_template(tx_hash: bytes) -> tuple[str, str, str]:
     pk1, sig1 = generate_sig_pair(tx_hash)
     pk2, sig2 = generate_sig_pair(tx_hash)
     redeem_script_asm = generate_asm_script(
-        "OP_2 <{}> <{}> OP_2 OP_CHECKMULTISIG", pk1, pk2
+        "OP_2\n<{}>\n<{}> # pubkey1 pubkey2 ...\nOP_2\nOP_CHECKMULTISIG", pk1, pk2
     )
     redeem_script_bytes = Script.parse(redeem_script_asm).serialize()
     redeem_script_hash = hash160(redeem_script_bytes)
 
     scriptSig = generate_asm_script(
-        "<{}>\n<{}> # sig1 sig2 ...\n{{{}}} # redeem script (pubkey1 pubkey2 ...)",
+        "<{}>\n<{}> # sig1 sig2 ...\n{{\n{}\n}} # redeem script hex",
         sig1,
         sig2,
         redeem_script_asm,
@@ -87,7 +87,7 @@ def generate_p2wsh_template(tx_hash: bytes) -> tuple[str, str, str]:
         "OP_0\n<{}> # witness script hash", witness_script_hash
     )
     witness = generate_asm_script(
-        "<{}> # sig\n{{{}}} # witness script", sig, witness_script_asm
+        "<{}> # sig\n{{\n{}\n}} # witness script", sig, witness_script_asm
     )
 
     return ("", scriptPubkey, witness)
@@ -103,7 +103,7 @@ def generate_p2tr_template(tx_hash: bytes) -> tuple[str, str, str]:
         "OP_1\n<{}> # witness script hash", witness_script_hash
     )
     witness = generate_asm_script(
-        "<{}> # sig\n{{{}}} # witness script", sig, witness_script_asm
+        "<{}> # sig\n{{\n{}\n}} # witness script", sig, witness_script_asm
     )
 
     return ("", scriptPubkey, witness)
