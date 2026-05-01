@@ -115,8 +115,10 @@ class BitcoinScriptInterpreter:
         # Check if it's a SegWit transaction by inspecting the scriptPubKey pattern
         if self._is_witness_program():
             logging.info("\nSegWit Pattern Detected!")
-
-            return self._execute_witness_program()
+            try:
+                return self._execute_witness_program()
+            except VMError:
+                return False
 
         # Traditional legacy
         try:
