@@ -1,0 +1,745 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bitcoin UTXO Visualizer</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    :root {
+      --panel-bg: #ffffff;
+      --panel-shadow: 0 2px 10px rgba(0,0,0,.08);
+    }
+    body { background: #f0f2f5; font-size: .92rem; }
+
+    /* ── Navbar ── */
+    .navbar { background: linear-gradient(135deg,#0f172a,#1e3a5f); }
+
+    /* ── Panels ── */
+    .panel {
+      background: var(--panel-bg);
+      border-radius: 14px;
+      padding: 1.2rem;
+      box-shadow: var(--panel-shadow);
+      height: 100%;
+    }
+    .panel-title {
+      font-weight: 700;
+      font-size: .78rem;
+      text-transform: uppercase;
+      letter-spacing: .07em;
+      color: #94a3b8;
+      border-bottom: 1px solid #f1f5f9;
+      padding-bottom: .5rem;
+      margin-bottom: 1rem;
+    }
+
+    /* ── UTXO cards ── */
+    .utxo-card {
+      border-radius: 10px;
+      border: 2px solid #e2e8f0;
+      padding: .65rem .8rem;
+      margin-bottom: .5rem;
+      cursor: pointer;
+      transition: border-color .15s, background .15s, transform .1s, box-shadow .1s;
+      user-select: none;
+    }
+    .utxo-card:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,.1); }
+    .utxo-card.selected-card {
+      border-color: #3b82f6;
+      background: #eff6ff;
+    }
+    .utxo-card.selected-card.owner-Bob     { border-color: #10b981; background: #f0fdf4; }
+    .utxo-card.selected-card.owner-Charlie { border-color: #f59e0b; background: #fffbeb; }
+
+    .utxo-amount { font-size: 1.05rem; font-weight: 700; }
+    .utxo-meta   { font-size: .72rem; color: #94a3b8; font-family: monospace; }
+
+    /* ── Output rows ── */
+    .output-row {
+      background: #f8fafc;
+      border-radius: 8px;
+      padding: .5rem .7rem;
+      margin-bottom: .35rem;
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+    }
+
+    /* ── Summary table ── */
+    .summary-table td { padding: .2rem .4rem; }
+    .summary-table .label { color: #64748b; }
+    .summary-table .value { text-align: right; font-weight: 600; }
+    .fee-negative { color: #ef4444 !important; }
+
+    /* ── History cards ── */
+    .hist-card {
+      background: #f8fafc;
+      border-radius: 10px;
+      padding: .7rem .85rem;
+      margin-bottom: .5rem;
+      font-size: .8rem;
+    }
+    .hist-card .txid { font-family: monospace; color: #94a3b8; font-size: .7rem; }
+
+    /* ── Misc ── */
+    .arrow-col { color: #cbd5e1; font-size: 1.1rem; text-align: center; }
+    .total-chip {
+      background: #f1f5f9;
+      border-radius: 20px;
+      padding: .15rem .7rem;
+      font-size: .78rem;
+      font-weight: 600;
+      color: #475569;
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Navbar ── -->
+<nav class="navbar navbar-dark py-2 px-4">
+  <span class="navbar-brand fw-bold mb-0 h5">⛓ Bitcoin UTXO Visualizer</span>
+  <div class="d-flex gap-2">
+    <button class="btn btn-sm btn-outline-warning"
+            data-bs-toggle="modal" data-bs-target="#multisigModal">
+      ➕ Create Multisig
+    </button>
+    <button class="btn btn-sm btn-outline-light" onclick="resetState()">🔄 Reset</button>
+  </div>
+</nav>
+
+<!-- ── Multisig creation modal ────────────────────────────────────── -->
+<div class="modal fade" id="multisigModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">🔐 Create Multisig UTXO</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <!-- Script type -->
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Script Type</label>
+          <select id="ms-script-type" class="form-select form-select-sm" onchange="updateMsN()">
+            <option value="P2SH">P2SH (hash160)</option>
+            <option value="P2WSH">P2WSH (sha256, SegWit)</option>
+          </select>
+        </div>
+        <!-- Threshold -->
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Threshold (M-of-N)</label>
+          <div class="d-flex gap-2 align-items-center">
+            <select id="ms-m" class="form-select form-select-sm" style="width:80px">
+              <option value="1">1</option>
+              <option value="2" selected>2</option>
+              <option value="3">3</option>
+            </select>
+            <span class="text-muted">of</span>
+            <span id="ms-n-label" class="fw-semibold">2</span>
+            <span class="text-muted">required signatures</span>
+          </div>
+        </div>
+
+        <!-- Signers -->
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Co-signers</label>
+          <div class="d-flex gap-2 flex-wrap">
+            {% for name, _ in accounts.items() %}
+            <div class="form-check form-check-inline">
+              <input class="form-check-input ms-signer-check" type="checkbox"
+                     id="ms-{{ name }}" value="{{ name }}" onchange="updateMsN()">
+              <label class="form-check-label badge bg-{{ owner_colors.get(name,'secondary') }}"
+                     for="ms-{{ name }}">{{ name }}</label>
+            </div>
+            {% endfor %}
+          </div>
+          <div id="ms-signer-error" class="text-danger small mt-1" style="display:none">
+            Select at least 2 co-signers.
+          </div>
+        </div>
+
+        <!-- Amount -->
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Initial Amount (sat)</label>
+          <input type="number" id="ms-amount" class="form-control"
+                 value="100000" min="1">
+        </div>
+
+        <!-- Preview -->
+        <div id="ms-preview" class="alert alert-secondary small p-2" style="display:none">
+          Will create: <strong id="ms-preview-text"></strong>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-warning fw-semibold" onclick="createMultisig()">
+          🔐 Create Multisig UTXO
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="container-fluid py-3 px-4">
+
+  <!-- Account legend -->
+  <div class="d-flex gap-2 flex-wrap mb-3">
+    {% for name, acct in accounts.items() %}
+    <span class="badge bg-{{ owner_colors.get(name, 'secondary') }} py-2 px-3">
+      {{ name }}
+      <span class="fw-normal opacity-75 ms-1 font-monospace" style="font-size:.7rem">{{ acct.address }}</span>
+    </span>
+    {% endfor %}
+    <span class="badge bg-secondary py-2 px-3">Signing is automatic 🔑</span>
+  </div>
+
+  <!-- Result banner -->
+  <div id="result-banner" class="mb-3"></div>
+
+  <!-- Main row -->
+  <div class="row g-3">
+
+    <!-- UTXO Pool -->
+    <div class="col-lg-4">
+      <div class="panel">
+        <div class="panel-title d-flex justify-content-between align-items-center">
+          <span>💰 UTXO Pool</span>
+          <span class="total-chip" id="pool-total">— sat</span>
+        </div>
+        <p class="text-muted small mb-2">Click a UTXO to add it as an input</p>
+        <div id="utxo-pool">
+          <div class="text-center text-muted py-4">Loading…</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Transaction Builder -->
+    <div class="col-lg-5">
+      <div class="panel">
+        <div class="panel-title">🔧 Transaction Builder</div>
+
+        <!-- Selected inputs summary -->
+        <div class="mb-3">
+          <label class="form-label fw-semibold small">Selected Inputs
+            <span class="text-muted fw-normal" id="inputs-hint">(none)</span>
+          </label>
+          <div id="selected-inputs-list"></div>
+        </div>
+
+        <!-- Add output -->
+        <label class="form-label fw-semibold small">Add Output</label>
+        <div class="row g-2 mb-1">
+          <!-- Recipient (hidden for P2SH) -->
+          <div class="col-4" id="out-recipient-wrap">
+            <select id="out-recipient" class="form-select form-select-sm">
+              {% for name in accounts.keys() %}
+              <option>{{ name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-4">
+            <input type="number" id="out-amount" class="form-control form-control-sm"
+                   placeholder="Amount (sat)" min="1"
+                   onkeydown="if(event.key==='Enter') addOutput()">
+          </div>
+          <div class="col-2">
+            <select id="out-type" class="form-select form-select-sm"
+                    onchange="onOutTypeChange()">
+              <option value="P2PKH">P2PKH</option>
+              <option value="P2WPKH">P2WPKH</option>
+              <option value="P2SH">P2SH</option>
+              <option value="P2WSH">P2WSH</option>
+            </select>
+          </div>
+          <div class="col-2">
+            <button class="btn btn-sm btn-primary w-100" onclick="addOutput()">+</button>
+          </div>
+        </div>
+
+        <!-- P2SH / P2WSH multisig config (shown only for multisig types) -->
+        <div id="out-ms-config" class="mb-1 p-2 rounded small"
+             style="display:none; background:#f1f5f9; border:1px solid #e2e8f0">
+          <div class="d-flex align-items-center gap-2 mb-1 flex-wrap">
+            <span class="text-muted fw-semibold">M:</span>
+            <select id="out-ms-m" class="form-select form-select-sm" style="width:65px">
+              <option value="1">1</option>
+              <option value="2" selected>2</option>
+            </select>
+            <span class="text-muted">of <strong id="out-ms-n">0</strong> signers</span>
+          </div>
+          <div class="d-flex gap-3 flex-wrap">
+            {% for name, _ in accounts.items() %}
+            <label class="d-flex align-items-center gap-1" style="cursor:pointer">
+              <input type="checkbox" class="out-ms-check" value="{{ name }}"
+                     onchange="onOutMsChange()">
+              <span class="badge bg-{{ owner_colors.get(name,'secondary') }}">{{ name }}</span>
+            </label>
+            {% endfor %}
+          </div>
+        </div>
+
+        <div id="outputs-list" class="mb-3 mt-2">
+          <p class="text-muted small mb-0">No outputs yet</p>
+        </div>
+
+        <!-- Summary -->
+        <table class="summary-table w-100 mb-3">
+          <tr><td class="label">Total In</td>  <td class="value" id="sum-in">0 sat</td></tr>
+          <tr><td class="label">Total Out</td> <td class="value" id="sum-out">0 sat</td></tr>
+          <tr style="border-top:1px solid #e2e8f0">
+              <td class="label">Fee</td>       <td class="value" id="sum-fee">0 sat</td></tr>
+        </table>
+
+        <!-- Change hint — shown when total_in > total_out -->
+        <div id="change-hint" class="rounded p-2 mb-3 small" style="display:none;
+             background:#fefce8; border:1px solid #fde047">
+          ⚠️ <strong id="change-amount-label"></strong> sat unallocated
+          — this will be lost as miner fee unless you add a change output.
+          <div class="mt-1">
+            <button class="btn btn-sm btn-warning py-0 px-2 me-1"
+                    id="change-btn" onclick="addChangeOutput()">
+              ↩ Add Change →<span id="change-recipient-label"></span>
+            </button>
+            <span class="text-muted" style="font-size:.72rem">
+              returns remainder to sender
+            </span>
+          </div>
+        </div>
+
+        <button id="submit-btn" class="btn btn-success w-100 fw-semibold" disabled
+                onclick="submitTransaction()">
+          🚀 Send Transaction
+        </button>
+        <p class="text-muted small mt-2 mb-0">
+          Signatures are generated server-side using the UTXO owner's key.
+        </p>
+      </div>
+    </div>
+
+    <!-- Transaction History -->
+    <div class="col-lg-3">
+      <div class="panel">
+        <div class="panel-title d-flex justify-content-between">
+          <span>📜 History</span>
+          <span class="total-chip" id="hist-count">0 tx</span>
+        </div>
+        <div id="history-list">
+          <p class="text-muted small">No transactions yet</p>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /row -->
+</div><!-- /container -->
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+// ── State ────────────────────────────────────────────────────────────────
+let utxos          = [];
+let selectedInputs = {};  // key → utxo dict
+let outputs        = [];  // [{recipient, amount, script_type}]
+
+const OWNER_COLOR  = {Alice:"primary", Bob:"success", Charlie:"warning"};
+const OWNER_BG     = {Alice:"owner-Alice", Bob:"owner-Bob", Charlie:"owner-Charlie"};
+
+// ── Fetch & render state ─────────────────────────────────────────────────
+async function loadState() {
+  const r = await fetch("/api/state");
+  const d = await r.json();
+  utxos = d.utxos;
+  document.getElementById("pool-total").textContent =
+    d.total.toLocaleString() + " sat";
+  renderPool();
+  renderSelectedInputs();
+  updateSummary();
+}
+
+function renderPool() {
+  const pool = document.getElementById("utxo-pool");
+  if (!utxos.length) {
+    pool.innerHTML = '<p class="text-muted text-center py-3">🪣 Empty UTXO pool</p>';
+    return;
+  }
+  pool.innerHTML = utxos.map(u => {
+    const key = `${u.txid}:${u.vout}`;
+    const sel = key in selectedInputs;
+
+    // Owner badge(s): multisig shows one badge per co-signer
+    let ownerBadges, borderCol;
+    if (u.multisig) {
+      const ms = u.multisig;
+      ownerBadges = ms.signers.map(s =>
+        `<span class="badge bg-${OWNER_COLOR[s]||'secondary'} me-1">${s}</span>`
+      ).join("");
+      ownerBadges = `<span class="me-1 small text-muted">${ms.m}-of-${ms.n}</span>` + ownerBadges;
+      borderCol = "6f42c1";  // purple for multisig
+    } else {
+      const col = OWNER_COLOR[u.owner] || "secondary";
+      ownerBadges = `<span class="badge bg-${col}">${u.owner}</span>`;
+      borderCol = {primary:"3b82f6", success:"10b981", warning:"f59e0b"}[col] || "94a3b8";
+    }
+
+    const selStyle = sel
+      ? `border-color:#${borderCol};background:#f8f5ff;border-width:2px`
+      : "";
+
+    return `
+      <div class="utxo-card" style="${selStyle}" onclick="toggleInput('${u.txid}',${u.vout})">
+        <div class="d-flex justify-content-between align-items-center mb-1 flex-wrap gap-1">
+          <div>${ownerBadges}</div>
+          <div>
+            <span class="badge bg-light text-dark border">${u.script_type}</span>
+            ${sel ? '<span class="badge bg-primary ms-1">✓</span>' : ''}
+          </div>
+        </div>
+        <div class="utxo-amount">${u.amount.toLocaleString()} <span class="fw-normal text-muted" style="font-size:.75rem">sat</span></div>
+        <div class="utxo-meta">${u.txid_short} · #${u.vout}</div>
+      </div>`;
+  }).join("");
+}
+
+// ── Input selection ───────────────────────────────────────────────────────
+function toggleInput(txid, vout) {
+  const key  = `${txid}:${vout}`;
+  const utxo = utxos.find(u => u.txid === txid && u.vout === vout);
+  if (!utxo) return;
+  if (key in selectedInputs) delete selectedInputs[key];
+  else selectedInputs[key] = utxo;
+  renderPool();
+  renderSelectedInputs();
+  updateSummary();
+}
+
+function renderSelectedInputs() {
+  const n    = Object.keys(selectedInputs).length;
+  const hint = document.getElementById("inputs-hint");
+  const list = document.getElementById("selected-inputs-list");
+  hint.textContent = n ? `(${n} selected)` : "(none)";
+  if (!n) { list.innerHTML = ""; return; }
+  list.innerHTML = Object.values(selectedInputs).map(u => {
+    const col = OWNER_COLOR[u.owner] || "secondary";
+    const key = `${u.txid}:${u.vout}`;
+    return `
+      <div class="output-row">
+        <span class="badge bg-${col}">${u.owner}</span>
+        <span class="fw-semibold">${u.amount.toLocaleString()} sat</span>
+        <span class="text-muted small flex-grow-1">${u.txid_short} #${u.vout}</span>
+        <button class="btn btn-sm btn-outline-secondary py-0 px-1"
+                onclick="toggleInput('${u.txid}',${u.vout})" title="Remove">×</button>
+      </div>`;
+  }).join("");
+}
+
+// ── Output type toggle ────────────────────────────────────────────────────
+function onOutTypeChange() {
+  const type   = document.getElementById("out-type").value;
+  const isMs   = type === "P2SH" || type === "P2WSH";
+  document.getElementById("out-recipient-wrap").style.display = isMs ? "none" : "";
+  document.getElementById("out-ms-config").style.display      = isMs ? ""     : "none";
+}
+
+function onOutMsChange() {
+  const n = document.querySelectorAll(".out-ms-check:checked").length;
+  document.getElementById("out-ms-n").textContent = n;
+  const mSel = document.getElementById("out-ms-m");
+  const curM = parseInt(mSel.value);
+  mSel.innerHTML = Array.from({length: Math.max(n, 1)}, (_, i) =>
+    `<option value="${i+1}" ${i+1===Math.min(curM,n)?'selected':''}>${i+1}</option>`
+  ).join("");
+}
+
+// ── Output management ─────────────────────────────────────────────────────
+function addOutput() {
+  const amt   = parseInt(document.getElementById("out-amount").value);
+  const stype = document.getElementById("out-type").value;
+  if (!amt || amt <= 0) { flash("Enter a valid amount", "warning"); return; }
+
+  if (stype === "P2SH" || stype === "P2WSH") {
+    const m       = parseInt(document.getElementById("out-ms-m").value);
+    const signers = [...document.querySelectorAll(".out-ms-check:checked")].map(c => c.value);
+    if (signers.length < 2) { flash("Select ≥ 2 co-signers for multisig", "warning"); return; }
+    if (m < 1 || m > signers.length) { flash("Invalid threshold M", "warning"); return; }
+    outputs.push({ amount: amt, script_type: stype, m, multisig_signers: signers });
+  } else {
+    const rec = document.getElementById("out-recipient").value;
+    outputs.push({ recipient: rec, amount: amt, script_type: stype });
+  }
+  document.getElementById("out-amount").value = "";
+  renderOutputs();
+  updateSummary();
+}
+
+function removeOutput(i) {
+  outputs.splice(i, 1);
+  renderOutputs();
+  updateSummary();
+}
+
+function renderOutputs() {
+  const el = document.getElementById("outputs-list");
+  if (!outputs.length) {
+    el.innerHTML = '<p class="text-muted small mb-0">No outputs yet</p>';
+    return;
+  }
+  el.innerHTML = outputs.map((o, i) => {
+    let ownerHtml;
+    if (o.multisig_signers) {
+      const badges = o.multisig_signers.map(s =>
+        `<span class="badge bg-${OWNER_COLOR[s]||'secondary'} me-1">${s}</span>`
+      ).join("");
+      ownerHtml = `<span class="text-muted small me-1">${o.m}-of-${o.multisig_signers.length}</span>${badges}`;
+    } else {
+      const col = OWNER_COLOR[o.recipient] || "secondary";
+      ownerHtml = `<span class="badge bg-${col}">${o.recipient}</span>`;
+    }
+    return `
+      <div class="output-row flex-wrap gap-1">
+        ${ownerHtml}
+        <span class="fw-semibold">${o.amount.toLocaleString()} sat</span>
+        <span class="text-muted small">${o.script_type}</span>
+        <span class="flex-grow-1"></span>
+        <button class="btn btn-sm btn-outline-danger py-0 px-1"
+                onclick="removeOutput(${i})">×</button>
+      </div>`;
+  }).join("");
+}
+
+// ── Summary ───────────────────────────────────────────────────────────────
+function updateSummary() {
+  const totalIn  = Object.values(selectedInputs).reduce((s,u) => s + u.amount, 0);
+  const totalOut = outputs.reduce((s,o) => s + o.amount, 0);
+  const fee      = totalIn - totalOut;
+
+  document.getElementById("sum-in").textContent  = totalIn.toLocaleString()  + " sat";
+  document.getElementById("sum-out").textContent = totalOut.toLocaleString() + " sat";
+  const feeEl = document.getElementById("sum-fee");
+  feeEl.textContent = fee.toLocaleString() + " sat";
+  feeEl.className   = "value" + (fee < 0 ? " fee-negative" : "");
+
+  // ── Change hint ────────────────────────────────────────────────────────
+  const hint    = document.getElementById("change-hint");
+  const hasInps = Object.keys(selectedInputs).length > 0;
+  if (hasInps && fee > 0 && outputs.length > 0) {
+    const firstInput = Object.values(selectedInputs)[0];
+    let changeLabel, changeMeta;
+
+    if (firstInput.multisig) {
+      // Change goes back to the same M-of-N multisig (P2SH or P2WSH)
+      const ms    = firstInput.multisig;
+      const msType = firstInput.script_type || "P2SH";
+      const bgs = ms.signers.map(s =>
+        `<span class="badge bg-${OWNER_COLOR[s]||'secondary'} ms-1">${s}</span>`
+      ).join("");
+      changeLabel = `${ms.m}-of-${ms.n} ${msType}` + bgs;
+      changeMeta  = JSON.stringify({ type: msType, m: ms.m, signers: ms.signers });
+    } else {
+      const sender = firstInput.owner || "Alice";
+      const col    = OWNER_COLOR[sender] || "secondary";
+      changeLabel  = `<span class="badge bg-${col} ms-1">${sender}</span>`;
+      changeMeta   = JSON.stringify({ type: "single", name: sender });
+    }
+
+    document.getElementById("change-amount-label").textContent = fee.toLocaleString();
+    document.getElementById("change-recipient-label").innerHTML = changeLabel;
+    hint.dataset.meta   = changeMeta;
+    hint.dataset.amount = fee;
+    hint.style.display  = "";
+  } else {
+    hint.style.display = "none";
+  }
+
+  const btn = document.getElementById("submit-btn");
+  btn.disabled = !(hasInps && outputs.length > 0 && fee >= 0);
+}
+
+function addChangeOutput() {
+  const hint   = document.getElementById("change-hint");
+  const meta   = JSON.parse(hint.dataset.meta || "null");
+  const amount = parseInt(hint.dataset.amount, 10);
+  if (!meta || !amount || amount <= 0) return;
+
+  if (meta.type === "P2SH" || meta.type === "P2WSH") {
+    outputs.push({ amount, script_type: meta.type, m: meta.m, multisig_signers: meta.signers });
+  } else {
+    outputs.push({ recipient: meta.name, amount, script_type: "P2PKH" });
+  }
+  renderOutputs();
+  updateSummary();
+}
+
+// ── Transaction submission ────────────────────────────────────────────────
+async function submitTransaction() {
+  const btn = document.getElementById("submit-btn");
+  btn.disabled = true;
+  btn.innerHTML = "⏳ Validating…";
+
+  const body = {
+    inputs:  Object.values(selectedInputs).map(u => ({txid: u.txid, vout: u.vout})),
+    outputs: outputs,
+  };
+
+  try {
+    const resp   = await fetch("/api/transact", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body),
+    });
+    const result = await resp.json();
+
+    showResult(result);
+    if (result.success) {
+      selectedInputs = {};
+      outputs = [];
+      renderOutputs();
+    }
+    await loadState();
+    await loadHistory();
+  } catch(e) {
+    flash("Network error: " + e.message, "danger");
+  } finally {
+    btn.innerHTML = "🚀 Send Transaction";
+    updateSummary();
+  }
+}
+
+// ── Result banner ─────────────────────────────────────────────────────────
+function showResult(r) {
+  const ok  = r.success;
+  const cls = ok ? "alert-success" : "alert-danger";
+  const ico = ok ? "✅" : "❌";
+  let inner = `<strong>${ico} ${ok ? "Transaction applied!" : "Transaction rejected"}</strong>
+               <div class="mt-1">${r.message || r.error || ""}</div>`;
+  if (ok) {
+    inner += `
+      <hr class="my-2">
+      <div class="font-monospace small" style="word-break:break-all">
+        <strong>TXID:</strong> ${r.txid}
+      </div>
+      <div class="small mt-1">
+        <strong>Fee:</strong> ${r.fee?.toLocaleString()} sat &nbsp;|&nbsp;
+        <strong>Inputs:</strong> ${r.total_in?.toLocaleString()} sat &nbsp;→&nbsp;
+        <strong>Outputs:</strong> ${r.total_out?.toLocaleString()} sat
+      </div>`;
+  }
+  document.getElementById("result-banner").innerHTML =
+    `<div class="alert ${cls} alert-dismissible fade show mb-0">
+       <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+       ${inner}
+     </div>`;
+  document.getElementById("result-banner").scrollIntoView({behavior:"smooth"});
+}
+
+// ── History ───────────────────────────────────────────────────────────────
+async function loadHistory() {
+  const r = await fetch("/api/history");
+  const d = await r.json();
+  renderHistory(d.history);
+}
+
+function renderHistory(hist) {
+  document.getElementById("hist-count").textContent = hist.length + " tx";
+  const el = document.getElementById("history-list");
+  if (!hist.length) {
+    el.innerHTML = '<p class="text-muted small">No transactions yet</p>';
+    return;
+  }
+  el.innerHTML = [...hist].reverse().map(tx => {
+    const ins  = tx.inputs.map(i =>
+      `<span class="badge bg-${OWNER_COLOR[i.owner]||"secondary"} me-1">${i.owner} ${i.amount?.toLocaleString()}</span>`
+    ).join("");
+    const outs = tx.outputs.map(o =>
+      `<span class="badge bg-${OWNER_COLOR[o.recipient]||"secondary"} me-1">${o.recipient} ${o.amount?.toLocaleString()}</span>`
+    ).join("");
+    return `
+      <div class="hist-card">
+        <div class="txid mb-1">${tx.txid_short}</div>
+        <div>${ins} → ${outs}</div>
+        <div class="text-muted mt-1">fee ${tx.fee?.toLocaleString()} sat</div>
+      </div>`;
+  }).join("");
+}
+
+// ── Reset ─────────────────────────────────────────────────────────────────
+async function resetState() {
+  if (!confirm("Reset to initial state? All transactions will be cleared.")) return;
+  await fetch("/api/reset", {method:"POST"});
+  selectedInputs = {};
+  outputs = [];
+  renderOutputs();
+  document.getElementById("result-banner").innerHTML = "";
+  await loadState();
+  await loadHistory();
+}
+
+// ── Flash helper ──────────────────────────────────────────────────────────
+function flash(msg, type="info") {
+  const el = document.getElementById("result-banner");
+  el.innerHTML = `<div class="alert alert-${type} alert-dismissible fade show">
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>${msg}</div>`;
+}
+
+// ── P2SH Multisig creation ────────────────────────────────────────────────
+function updateMsN() {
+  const checked = [...document.querySelectorAll(".ms-signer-check:checked")].map(c => c.value);
+  const n = checked.length;
+  document.getElementById("ms-n-label").textContent = n;
+
+  // Clamp M to [1, n]
+  const mSel = document.getElementById("ms-m");
+  const m    = parseInt(mSel.value);
+  mSel.innerHTML = Array.from({length: Math.max(n, 1)}, (_,i) =>
+    `<option value="${i+1}" ${i+1===Math.min(m,n)?'selected':''}>${i+1}</option>`
+  ).join("");
+
+  const errEl = document.getElementById("ms-signer-error");
+  errEl.style.display = n < 2 ? "" : "none";
+
+  const preview = document.getElementById("ms-preview");
+  if (n >= 2) {
+    const curM = parseInt(mSel.value);
+    const stype = document.getElementById("ms-script-type").value;
+    document.getElementById("ms-preview-text").textContent =
+      `${curM}-of-${n} ${stype} (${checked.join(", ")})`;
+    preview.style.display = "";
+  } else {
+    preview.style.display = "none";
+  }
+}
+
+async function createMultisig() {
+  const signers     = [...document.querySelectorAll(".ms-signer-check:checked")].map(c => c.value);
+  const m           = parseInt(document.getElementById("ms-m").value);
+  const amount      = parseInt(document.getElementById("ms-amount").value);
+  const script_type = document.getElementById("ms-script-type").value;
+
+  if (signers.length < 2) {
+    document.getElementById("ms-signer-error").style.display = "";
+    return;
+  }
+
+  const resp   = await fetch("/api/create_multisig", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({m, signers, amount, script_type}),
+  });
+  const result = await resp.json();
+
+  if (result.success) {
+    bootstrap.Modal.getInstance(document.getElementById("multisigModal")).hide();
+    flash(`✅ Created ${result.description} — ${result.amount.toLocaleString()} sat`, "success");
+    // Reset form
+    document.querySelectorAll(".ms-signer-check").forEach(c => c.checked = false);
+    document.getElementById("ms-script-type").value = "P2SH";
+    updateMsN();
+    await loadState();
+  } else {
+    flash(`❌ ${result.error}`, "danger");
+  }
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────
+loadState();
+loadHistory();
+</script>
+</body>
+</html>
