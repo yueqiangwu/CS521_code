@@ -35,3 +35,4 @@ vscode/
 *.iml
 ipynb_checkpoints/
 .pytest_cache/
+.env
