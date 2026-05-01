@@ -58,7 +58,7 @@ def get_templates_options():
     """
     Return template options
     """
-    templates_options: list[str] = ["P2PK", "P2PKH", "P2SH", "P2WPKH", "P2WSH", "P2TR"]
+    templates_options: list[str] = ["P2PK", "P2PKH", "P2SH", "P2WPKH", "P2WSH"]
 
     return jsonify({"templatesOptions": templates_options})
 

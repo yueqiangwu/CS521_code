@@ -20,11 +20,12 @@ bitcoin_script_interpreter/
 │   ├── frontend/          # Frontend related files
 │   ├── app.py             # Backend flask server
 │   ├── common.py          # Useful definitions
-│   ├── crypto.py          # Cryptographic helper functions (Hash160, ECDSA verification)
+│   ├── crypto.py          # Cryptographic helper functions
 │   ├── engine.py          # Core Virtual Machine (VM) logic
 │   ├── main.py            # Tkinter UI entry point
 │   ├── opcodes.py         # Definitions for all opcode functions
-│   ├── script.py          # Script parser: Converts ASM/HEX to a list of instructions
+│   ├── script.py          # Script parser
+│   ├── templates.py       # Store transaction templates
 │   ├── transactions.py    # Dealing with different transactions
 │   └── ui.py              # Simple user interface
 ├── tests/                 # PyTest related files

@@ -34,11 +34,13 @@ class Script:
         if not cleaned_content:
             return cls([])
 
-        # Determine if it is ASM
-        if any(x in cleaned_content for x in ["OP_", " ", "{", "}", "<", ">", "#"]):
-            return cls.parse_asm(cleaned_content)
-        else:
-            return cls.parse_hex(cleaned_content)
+        # # Determine if it is ASM
+        # if any(x in cleaned_content for x in ["OP_", " ", "{", "}", "<", ">", "#"]):
+        #     return cls.parse_asm(cleaned_content)
+        # else:
+        #     return cls.parse_hex(cleaned_content)
+
+        return cls.parse_asm(cleaned_content)
 
     @classmethod
     def parse_asm(cls, raw_input: str):
@@ -49,6 +51,7 @@ class Script:
         cmds = []
 
         for token in tokens:
+            print(token)
             # Handling nested ASM blocks
             if token.startswith("{") and token.endswith("}"):
                 inner_asm = token[1:-1]
