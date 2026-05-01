@@ -121,8 +121,8 @@
         <div class="mb-3">
           <label class="form-label fw-semibold">Script Type</label>
           <select id="ms-script-type" class="form-select form-select-sm" onchange="updateMsN()">
-            <option value="P2SH">P2SH (hash160)</option>
-            <option value="P2WSH">P2WSH (sha256, SegWit)</option>
+            <option value="P2SH">P2SH (hash160, legacy)</option>
+            <option value="P2WSH">P2WSH (sha256, native SegWit)</option>
           </select>
         </div>
         <!-- Threshold -->
@@ -535,8 +535,11 @@ function updateSummary() {
     } else {
       const sender = firstInput.owner || "Alice";
       const col    = OWNER_COLOR[sender] || "secondary";
-      changeLabel  = `<span class="badge bg-${col} ms-1">${sender}</span>`;
-      changeMeta   = JSON.stringify({ type: "single", name: sender });
+      // Preserve the input's script type so change goes back in the same format
+      const stype  = (firstInput.script_type === "P2WPKH") ? "P2WPKH" : "P2PKH";
+      changeLabel  = `<span class="badge bg-${col} ms-1">${sender}</span>`
+                   + `<span class="badge bg-secondary ms-1">${stype}</span>`;
+      changeMeta   = JSON.stringify({ type: "single", name: sender, script_type: stype });
     }
 
     document.getElementById("change-amount-label").textContent = fee.toLocaleString();
@@ -561,7 +564,8 @@ function addChangeOutput() {
   if (meta.type === "P2SH" || meta.type === "P2WSH") {
     outputs.push({ amount, script_type: meta.type, m: meta.m, multisig_signers: meta.signers });
   } else {
-    outputs.push({ recipient: meta.name, amount, script_type: "P2PKH" });
+    // Preserve original script type (P2PKH or P2WPKH)
+    outputs.push({ recipient: meta.name, amount, script_type: meta.script_type || "P2PKH" });
   }
   renderOutputs();
   updateSummary();
@@ -647,9 +651,16 @@ function renderHistory(hist) {
     const ins  = tx.inputs.map(i =>
       `<span class="badge bg-${OWNER_COLOR[i.owner]||"secondary"} me-1">${i.owner} ${i.amount?.toLocaleString()}</span>`
     ).join("");
-    const outs = tx.outputs.map(o =>
-      `<span class="badge bg-${OWNER_COLOR[o.recipient]||"secondary"} me-1">${o.recipient} ${o.amount?.toLocaleString()}</span>`
-    ).join("");
+    const outs = tx.outputs.map(o => {
+      if (o.multisig) {
+        const ms = o.multisig;
+        const signerBadges = ms.signers.map(s =>
+          `<span class="badge bg-${OWNER_COLOR[s]||"secondary"} me-1">${s}</span>`
+        ).join("");
+        return `<span class="badge bg-dark me-1">${ms.m}-of-${ms.n} ${o.script_type} ${o.amount?.toLocaleString()}</span>${signerBadges}`;
+      }
+      return `<span class="badge bg-${OWNER_COLOR[o.recipient]||"secondary"} me-1">${o.recipient} ${o.amount?.toLocaleString()}</span>`;
+    }).join("");
     return `
       <div class="hist-card">
         <div class="txid mb-1">${tx.txid_short}</div>

@@ -101,13 +101,8 @@ class Transaction:
 
     def sighash(self, input_idx: int, utxo_script_pubkey: Script) -> bytes:
         """
-        Compute the 32-byte signature hash for a specific input (SIGHASH_ALL).
-
-        Follows simplified Bitcoin signing serialization:
-          - All inputs included; for the input being signed, substitute the
-            UTXO's scriptPubKey; all other inputs get an empty scriptSig.
-          - All outputs included as-is.
-          - Append SIGHASH_ALL type (4 bytes LE).
+        Legacy (P2PKH / P2SH) signature hash — SIGHASH_ALL.
+        NOT suitable for SegWit inputs; use sighash_segwit() for those.
         """
         data = self.version.to_bytes(4, "little")
 
@@ -133,6 +128,48 @@ class Transaction:
 
         return hashlib.sha256(data).digest()
 
+    def sighash_segwit(self, input_idx: int, script_code: bytes, amount: int) -> bytes:
+        """
+        BIP143 sighash for SegWit inputs (SIGHASH_ALL).
+
+        script_code:
+          P2WPKH       — equivalent P2PKH script: OP_DUP OP_HASH160 <hash> OP_EQUALVERIFY OP_CHECKSIG
+          P2WSH        — the witnessScript bytes
+        amount: satoshi value of the UTXO being spent
+        """
+        # hashPrevouts = SHA256d(all outpoints)
+        prevouts = b"".join(
+            inp.txid + inp.vout.to_bytes(4, "little") for inp in self.inputs
+        )
+        hash_prevouts = _sha256d(prevouts)
+
+        # hashSequence = SHA256d(all nSequence)
+        sequences = b"".join(
+            inp.sequence.to_bytes(4, "little") for inp in self.inputs
+        )
+        hash_sequence = _sha256d(sequences)
+
+        # hashOutputs = SHA256d(all serialized outputs)
+        outputs_raw = b""
+        for out in self.outputs:
+            sp = out.script_pubkey.serialize()
+            outputs_raw += out.amount.to_bytes(8, "little") + _encode_varint(len(sp)) + sp
+        hash_outputs = _sha256d(outputs_raw)
+
+        inp = self.inputs[input_idx]
+        data  = self.version.to_bytes(4, "little")
+        data += hash_prevouts
+        data += hash_sequence
+        data += inp.txid + inp.vout.to_bytes(4, "little")
+        data += _encode_varint(len(script_code)) + script_code
+        data += amount.to_bytes(8, "little")
+        data += inp.sequence.to_bytes(4, "little")
+        data += hash_outputs
+        data += self.locktime.to_bytes(4, "little")
+        data += (1).to_bytes(4, "little")  # SIGHASH_ALL
+
+        return _sha256d(data)
+
     def _serialize(self) -> bytes:
         """Full transaction serialization (used for txid computation)."""
         data = self.version.to_bytes(4, "little")
@@ -153,6 +190,34 @@ class Transaction:
 
         data += self.locktime.to_bytes(4, "little")
         return data
+
+
+# ── Sighash dispatch ─────────────────────────────────────────────────────
+
+def _compute_sighash(tx: "Transaction", idx: int, inp: TxInput, utxo: UTXO) -> bytes:
+    """
+    Choose the correct sighash algorithm for an input:
+      - Native P2WPKH  → BIP143, scriptCode = equivalent P2PKH script
+      - Native P2WSH   → BIP143, scriptCode = witnessScript (witness[-1])
+      - Everything else → legacy sighash (P2PKH, P2SH)
+    """
+    cmds = utxo.script_pubkey.cmds
+    v    = cmds[0] if cmds else None
+    is_op0 = v == 0x00 or v == b'\x00'
+
+    # Native P2WPKH: OP_0 + 20-byte hash
+    if len(cmds) == 2 and is_op0 and isinstance(cmds[1], bytes) and len(cmds[1]) == 20:
+        h           = cmds[1]
+        script_code = bytes([0x76, 0xa9, 0x14]) + h + bytes([0x88, 0xac])
+        return tx.sighash_segwit(idx, script_code, utxo.amount)
+
+    # Native P2WSH: OP_0 + 32-byte hash
+    if len(cmds) == 2 and is_op0 and isinstance(cmds[1], bytes) and len(cmds[1]) == 32:
+        script_code = inp.witness[-1] if inp.witness else b""
+        return tx.sighash_segwit(idx, script_code, utxo.amount)
+
+    # Legacy (P2PKH, regular P2SH, P2TR, …)
+    return tx.sighash(idx, utxo.script_pubkey)
 
 
 # ── Script execution helper ───────────────────────────────────────────────
@@ -270,7 +335,7 @@ class UTXOSet:
 
         # 4. Script validation for each input
         for i, (inp, utxo) in enumerate(zip(tx.inputs, input_utxos)):
-            sig_hash = tx.sighash(i, utxo.script_pubkey)
+            sig_hash = _compute_sighash(tx, i, inp, utxo)
             if not _execute_input(inp, utxo, sig_hash):
                 return False, f"input {i}: script validation failed"
 

@@ -13,6 +13,13 @@ from src.crypto import hash160, sha256
 from src.utxo import UTXO, TxInput, TxOutput, Transaction, UTXOSet
 
 
+# ── BIP143 scriptCode helpers ─────────────────────────────────────────────
+
+def _bip143_p2wpkh_code(pubkey_hash: bytes) -> bytes:
+    """P2WPKH scriptCode: equivalent P2PKH script."""
+    return bytes([0x76, 0xa9, 0x14]) + pubkey_hash + bytes([0x88, 0xac])
+
+
 # ── Signing helpers ───────────────────────────────────────────────────────
 
 def _ecdsa_sign(private_key_int: int, msg: bytes) -> tuple[bytes, bytes]:
@@ -243,7 +250,7 @@ def test_inflation_rejected():
 # ── P2WPKH transaction ────────────────────────────────────────────────────
 
 def test_p2wpkh_spend_valid():
-    logging.info("=== P2WPKH: valid spend ===")
+    logging.info("=== P2WPKH: valid spend (BIP143 sighash) ===")
 
     pubkey1, _ = _ecdsa_sign(PRIVKEY_1, b"\x00" * 32)
     pubkey2, _ = _ecdsa_sign(PRIVKEY_2, b"\x00" * 32)
@@ -256,11 +263,11 @@ def test_p2wpkh_spend_valid():
         outputs=[TxOutput(90_000, _p2wpkh_script_pubkey(pubkey2))],
     )
 
-    utxo     = us.get(GENESIS_TXID, 0)
-    sig_hash = tx.sighash(0, utxo.script_pubkey)
-    _, sig1  = _ecdsa_sign(PRIVKEY_1, sig_hash)
+    utxo        = us.get(GENESIS_TXID, 0)
+    script_code = _bip143_p2wpkh_code(hash160(pubkey1))
+    sig_hash    = tx.sighash_segwit(0, script_code, utxo.amount)
+    _, sig1     = _ecdsa_sign(PRIVKEY_1, sig_hash)
 
-    # SegWit: scriptSig is empty, signature goes in witness
     tx.inputs[0].witness = [sig1, pubkey1]
 
     ok, msg = us.validate_and_apply(tx)
@@ -283,9 +290,10 @@ def test_p2wpkh_wrong_pubkey():
         inputs=[TxInput(txid=GENESIS_TXID, vout=0)],
         outputs=[TxOutput(90_000, _p2wpkh_script_pubkey(pubkey2))],
     )
-    utxo = us.get(GENESIS_TXID, 0)
-    _, sig = _ecdsa_sign(PRIVKEY_1, tx.sighash(0, utxo.script_pubkey))
-    # Provide pubkey2 in witness even though scriptPubKey commits to pubkey1
+    utxo        = us.get(GENESIS_TXID, 0)
+    script_code = _bip143_p2wpkh_code(hash160(pubkey1))
+    _, sig      = _ecdsa_sign(PRIVKEY_1, tx.sighash_segwit(0, script_code, utxo.amount))
+    # pubkey2 doesn't match the hash in scriptPubKey → rejected
     tx.inputs[0].witness = [sig, pubkey2]
 
     ok, msg = us.validate(tx)
@@ -297,13 +305,13 @@ def test_p2wpkh_wrong_pubkey():
 # ── P2WSH transaction ─────────────────────────────────────────────────────
 
 def test_p2wsh_2of2_spend_valid():
-    logging.info("=== P2WSH 2-of-2: valid spend ===")
+    logging.info("=== P2WSH 2-of-2: valid spend (BIP143 sighash) ===")
 
     pubkey1, _ = _ecdsa_sign(PRIVKEY_1, b"\x00" * 32)
     pubkey2, _ = _ecdsa_sign(PRIVKEY_2, b"\x00" * 32)
 
     sp_script, witness_script = _p2wsh_multisig_script_pubkey(2, [pubkey1, pubkey2])
-    witness_script_bytes      = witness_script.serialize()
+    ws_bytes                  = witness_script.serialize()
 
     us = UTXOSet()
     us.add_coinbase(GENESIS_TXID, [TxOutput(100_000, sp_script)])
@@ -313,13 +321,12 @@ def test_p2wsh_2of2_spend_valid():
         outputs=[TxOutput(90_000, _p2pkh_script_pubkey(pubkey1))],
     )
 
-    utxo      = us.get(GENESIS_TXID, 0)
-    sig_hash  = tx.sighash(0, utxo.script_pubkey)
-    _, sig1   = _ecdsa_sign(PRIVKEY_1, sig_hash)
-    _, sig2   = _ecdsa_sign(PRIVKEY_2, sig_hash)
+    utxo     = us.get(GENESIS_TXID, 0)
+    sig_hash = tx.sighash_segwit(0, ws_bytes, utxo.amount)   # BIP143
+    _, sig1  = _ecdsa_sign(PRIVKEY_1, sig_hash)
+    _, sig2  = _ecdsa_sign(PRIVKEY_2, sig_hash)
 
-    # witness: [dummy, sig1, sig2, witness_script_bytes]
-    tx.inputs[0].witness = [b"", sig1, sig2, witness_script_bytes]
+    tx.inputs[0].witness = [b"", sig1, sig2, ws_bytes]
 
     ok, msg = us.validate_and_apply(tx)
     logging.info(f"Validation Result: {ok} — {msg}")
@@ -334,7 +341,7 @@ def test_p2wsh_missing_sig():
     pubkey2, _ = _ecdsa_sign(PRIVKEY_2, b"\x00" * 32)
 
     sp_script, witness_script = _p2wsh_multisig_script_pubkey(2, [pubkey1, pubkey2])
-    witness_script_bytes      = witness_script.serialize()
+    ws_bytes                  = witness_script.serialize()
 
     us = UTXOSet()
     us.add_coinbase(GENESIS_TXID, [TxOutput(100_000, sp_script)])
@@ -344,10 +351,11 @@ def test_p2wsh_missing_sig():
         outputs=[TxOutput(90_000, _p2pkh_script_pubkey(pubkey1))],
     )
     utxo     = us.get(GENESIS_TXID, 0)
-    _, sig1  = _ecdsa_sign(PRIVKEY_1, tx.sighash(0, utxo.script_pubkey))
+    sig_hash = tx.sighash_segwit(0, ws_bytes, utxo.amount)   # BIP143
+    _, sig1  = _ecdsa_sign(PRIVKEY_1, sig_hash)
 
-    # Only one sig provided for a 2-of-2 → should fail
-    tx.inputs[0].witness = [b"", sig1, witness_script_bytes]
+    # Only one sig for a 2-of-2 → should fail
+    tx.inputs[0].witness = [b"", sig1, ws_bytes]
 
     ok, msg = us.validate(tx)
     logging.info(f"Result: {ok} — {msg}")
