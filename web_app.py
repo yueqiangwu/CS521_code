@@ -468,9 +468,9 @@ _seed()
 # ── Routes ────────────────────────────────────────────────────────────────
 
 
-# @app.route("/")
-# def index():
-#     return render_template("index.html", accounts=ACCOUNTS, owner_colors=OWNER_COLORS)
+@app.route("/")
+def index():
+    return render_template("index.html", accounts=ACCOUNTS, owner_colors=OWNER_COLORS)
 
 
 @app.route("/api/state")

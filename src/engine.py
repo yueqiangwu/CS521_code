@@ -98,12 +98,11 @@ class BitcoinScriptInterpreter:
 
         # Check if it's a P2SH transaction
         if self.terminated and self._is_valid() and self._is_p2sh_pattern():
+            redeem_script_bytes = self._pre_exec_stack[-1]
+            inner_stack = list(self._pre_exec_stack[:-1])
             logging.info(
                 "\nPhase 1 (Fingerprint Verification) Passed, Preparing to Execute P2SH Phase 2!"
             )
-            # Use the pre-execution snapshot: top item is the redeem script
-            redeem_script_bytes = self._pre_exec_stack[-1]
-            inner_stack = list(self._pre_exec_stack[:-1])
             self._execute_p2sh(redeem_script_bytes, inner_stack, step_mode=True)
             self.terminated = False
 
@@ -115,8 +114,10 @@ class BitcoinScriptInterpreter:
         # Check if it's a SegWit transaction by inspecting the scriptPubKey pattern
         if self._is_witness_program():
             logging.info("\nSegWit Pattern Detected!")
-
-            return self._execute_witness_program()
+            try:
+                return self._execute_witness_program()
+            except VMError:
+                return False
 
         # Traditional legacy
         try:
@@ -127,11 +128,11 @@ class BitcoinScriptInterpreter:
 
         # Check if it's a P2SH transaction
         if self._is_valid() and self._is_p2sh_pattern():
+            redeem_script_bytes = self._pre_exec_stack[-1]
+            inner_stack = list(self._pre_exec_stack[:-1])
             logging.info(
                 "\nPhase 1 (Fingerprint Verification) Passed, Preparing to Execute P2SH Phase 2!"
             )
-            redeem_script_bytes = self._pre_exec_stack[-1]
-            inner_stack = list(self._pre_exec_stack[:-1])
             return self._execute_p2sh(redeem_script_bytes, inner_stack)
 
         return self._is_valid()
@@ -160,11 +161,8 @@ class BitcoinScriptInterpreter:
 
 
     def _is_p2sh_pattern(self) -> bool:
-        """
-        Check if the scriptPubKey is a P2SH pattern: OP_HASH160 <20-byte hash> OP_EQUAL
-        """
+        """Check if the scriptPubKey is P2SH: OP_HASH160 <20-byte hash> OP_EQUAL."""
         cmds = self.script.cmds
-        # 0xA9 = OP_HASH160, 0x87 = OP_EQUAL
         return len(cmds) == 3 and cmds[0] == 0xA9 and cmds[2] == 0x87
 
     def _execute_witness_program(self, step_mode: bool = False) -> bool:
