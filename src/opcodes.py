@@ -44,6 +44,14 @@ def op_0(vm: "BitcoinScriptInterpreter"):
     vm.push(b"")
 
 
+OP_OPCODE_MAP["OP_FALSE"] = 0x00
+
+
+@opcode(0x4F)
+def op_1negate(vm: "BitcoinScriptInterpreter"):
+    vm.push(-1)
+
+
 def _register_small_ints():
     def create_op_func(i):
         def op_func(vm: "BitcoinScriptInterpreter"):
@@ -65,6 +73,23 @@ def _register_small_ints():
 
 
 _register_small_ints()
+
+
+@opcode(0x61)
+def op_nop(vm: "BitcoinScriptInterpreter"):
+    pass
+
+
+@opcode(0x69)
+def op_verify(vm: "BitcoinScriptInterpreter"):
+    data = vm.pop()
+    if data != VM_TRUE:
+        raise VMError("OP_VERIFY failed")
+
+
+@opcode(0x6A)
+def op_return(vm: "BitcoinScriptInterpreter"):
+    vm.is_terminated = True
 
 
 @opcode(0x76)
