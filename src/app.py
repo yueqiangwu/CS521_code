@@ -11,8 +11,7 @@ from common import TX_HASH_SIZE, VMError
 from crypto import hash160, sha256, generate_sig_pair
 from engine_v2 import BitcoinScriptInterpreterV2
 from opcodes import opcode_2_op
-from script import Script
-from templates import generate_template
+from script import Script, generate_template
 
 logging.basicConfig(
     level=logging.INFO,

@@ -22,7 +22,7 @@ class BitcoinScriptInterpreter:
         self.tx_sig_hash = tx_sig_hash
 
         self.pc = 0
-        self.terminated = False
+        self.is_terminated = False
         self.active_inner_vm = None  # P2SH/SegWit
         self._pre_exec_stack = list(self.stack)  # Saved before scriptPubKey runs
 
@@ -46,7 +46,7 @@ class BitcoinScriptInterpreter:
     # ========== Execute functions ==========
 
     def step(self):
-        if self.terminated:
+        if self.is_terminated:
             logging.info("Execution already finished")
             return
 
@@ -54,14 +54,14 @@ class BitcoinScriptInterpreter:
         if self.active_inner_vm is not None:
             self.active_inner_vm.step()
 
-            if self.active_inner_vm.terminated:
+            if self.active_inner_vm.is_terminated:
                 res = self.active_inner_vm._is_valid()
                 if not res:
                     raise VMError("Inner VM execution failed")
 
                 self.push(VM_TRUE)
                 self.pc = len(self.script.cmds)
-                self.terminated = True
+                self.is_terminated = True
                 self.active_inner_vm = None
             return
 
@@ -87,27 +87,27 @@ class BitcoinScriptInterpreter:
             except VMError as e:
                 logging.info(f"Transaction failed: {e.message}")
 
-                self.terminated = True
+                self.is_terminated = True
                 raise e
         else:
             raise VMError(f"Unknown Opcode: {hex(cmd)}")
 
         self.pc += 1
         if self.pc == len(self.script.cmds):
-            self.terminated = True
+            self.is_terminated = True
 
         # Check if it's a P2SH transaction
-        if self.terminated and self._is_valid() and self._is_p2sh_pattern():
+        if self.is_terminated and self._is_valid() and self._is_p2sh_pattern():
             redeem_script_bytes = self._pre_exec_stack[-1]
             inner_stack = list(self._pre_exec_stack[:-1])
             logging.info(
                 "\nPhase 1 (Fingerprint Verification) Passed, Preparing to Execute P2SH Phase 2!"
             )
             self._execute_p2sh(redeem_script_bytes, inner_stack, step_mode=True)
-            self.terminated = False
+            self.is_terminated = False
 
     def execute(self) -> bool:
-        if self.terminated:
+        if self.is_terminated:
             logging.info("Execution already finished")
             return
 
@@ -121,7 +121,7 @@ class BitcoinScriptInterpreter:
 
         # Traditional legacy
         try:
-            while not self.terminated:
+            while not self.is_terminated:
                 self.step()
         except VMError:
             return False
@@ -140,7 +140,7 @@ class BitcoinScriptInterpreter:
     # ========== Transaction check functions ==========
 
     def _is_valid(self) -> bool:
-        if not self.terminated or len(self.stack) == 0:
+        if not self.is_terminated or len(self.stack) == 0:
             return False
 
         res = self.top()
@@ -208,7 +208,7 @@ class BitcoinScriptInterpreter:
             self.active_inner_vm = inner_vm
             return True
 
-        while not inner_vm.terminated:
+        while not inner_vm.is_terminated:
             inner_vm.step()
 
         return inner_vm._is_valid()
@@ -239,7 +239,7 @@ class BitcoinScriptInterpreter:
             self.active_inner_vm = inner_vm
             return True
 
-        while not inner_vm.terminated:
+        while not inner_vm.is_terminated:
             inner_vm.step()
         return inner_vm._is_valid()
     
@@ -269,7 +269,7 @@ class BitcoinScriptInterpreter:
             self.active_inner_vm = inner_vm
             return True
 
-        while not inner_vm.terminated:
+        while not inner_vm.is_terminated:
             inner_vm.step()
 
         return inner_vm._is_valid()
