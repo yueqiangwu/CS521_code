@@ -9,7 +9,7 @@ from common import (
     generate_p2pkh_script,
 )
 from crypto import hash160, sha256, verify_schnorr
-from opcodes import opcode_2_op, OPCODE_FUNC_MAP
+from opcodes import opcode_2_op, is_true, CONTROL_OPS, OPCODE_FUNC_MAP
 from script import Script
 
 
@@ -31,6 +31,8 @@ class BitcoinScriptInterpreterV2:
         self.pc = 0
         self.instructions = []
         self.stack = []
+        self.alt_stack = []
+        self.vf_stack: list[bool] = []
 
         self.trans_type = TransactionType.LEGACY
         self.instr_types: list[InstructionType] = []
@@ -223,7 +225,7 @@ class BitcoinScriptInterpreterV2:
         if not self.is_terminated or len(self.stack) < 1:
             return False
 
-        return self.top() == VM_TRUE
+        return is_true(self.top())
 
     # ========== Execute functions ==========
 
@@ -234,27 +236,34 @@ class BitcoinScriptInterpreterV2:
 
         # Fetch cmd using pc
         cmd = self.instructions[self.pc]
+        is_active = all(self.vf_stack)
+
         if isinstance(cmd, bytes):
-            logging.info(f"Step [{self.pc}] Push Data: {cmd.hex()}")
+            if is_active:
+                logging.info(f"Step [{self.pc}] Push Data: {cmd.hex()}")
 
-            self.push(cmd)
+                self.push(cmd)
         elif cmd in OPCODE_FUNC_MAP.keys():
-            logging.info(f"Step [{self.pc}] Executing: {opcode_2_op(cmd)}")
+            if is_active or cmd in CONTROL_OPS:
+                logging.info(f"Step [{self.pc}] Executing: {opcode_2_op(cmd)}")
 
-            func = OPCODE_FUNC_MAP[cmd]
-            try:
-                func(self)
-            except VMError as e:
-                logging.info(f"Transaction failed: {e.message}")
+                func = OPCODE_FUNC_MAP[cmd]
+                try:
+                    func(self)
+                except VMError as e:
+                    logging.info(f"Transaction failed: {e.message}")
 
-                self.is_terminated = True
-                raise e
+                    self.is_terminated = True
+                    raise e
         else:
             raise VMError(f"Unknown Opcode: {hex(cmd)}")
 
         self.pc += 1
         if self.pc == len(self.instructions):
             self.is_terminated = True
+
+            if self.vf_stack:
+                raise VMError("Unbalanced conditional: missing OP_ENDIF")
 
         if (
             self.trans_type == TransactionType.P2SH

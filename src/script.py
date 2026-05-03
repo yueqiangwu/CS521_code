@@ -2,7 +2,7 @@ import re
 
 from common import VMError, generate_asm_script
 from crypto import generate_sig_pair, hash160, sha256
-from opcodes import op_2_opcode, opcode_2_op
+from opcodes import op_2_opcode, opcode_2_op, int_to_scriptnum
 
 
 class Script:
@@ -31,38 +31,110 @@ class Script:
         lines = raw_input.split("\n")
         cleaned_content = " ".join(line.split("#")[0].strip() for line in lines)
 
-        # Valid token: OP_xxx, <hex> / hex, {nested script}
-        pattern = r"\{.*?\}|<.*?>|OP_\w+|\S+"
+        # Valid token:
+        # opcodes: (OP_)xxx
+        # pushdata: <hex> / 0x01~0x4B + hex
+        # hex script: {script}
+        # number: 10 base
+        # string: "str" / 'str'
+        pattern = r"\{.*?\}|<.*?>|\".*?\"|'.*?'|OP_\w+|\S+"
         tokens = re.findall(pattern, cleaned_content)
 
         cmds = []
+        i = 0
 
-        for token in tokens:
-            print(token)
+        while i < len(tokens):
+            token = tokens[i]
+
             # Handling nested ASM blocks
             if token.startswith("{") and token.endswith("}"):
                 inner_asm = token[1:-1]
                 inner_script = cls.parse_asm(inner_asm)
                 cmds.append(inner_script.serialize())
-            # Handling data
-            elif token.startswith("<") and token.endswith(">"):
+                i += 1
+                continue
+
+            # Handling hex data (<hex>)
+            if token.startswith("<") and token.endswith(">"):
                 try:
                     cmds.append(bytes.fromhex(token[1:-1]))
                 except Exception:
                     raise VMError(f"Invalid hex data: {token}")
-            # Handling opcode
-            elif token.upper().startswith("OP_"):
-                opcode = op_2_opcode(token)
-                if opcode is None:
-                    raise VMError(f"Unknown operation: {token}")
+                i += 1
+                continue
 
-                cmds.append(opcode)
-            # other hex
-            else:
+            # Handling string
+            if (token.startswith('"') and token.endswith('"')) or (
+                token.startswith("'") and token.endswith("'")
+            ):
                 try:
-                    cmds.append(bytes.fromhex(token))
+                    cmds.append(token[1:-1].encode())
                 except Exception:
-                    raise VMError(f"Invalid token in ASM: {token}")
+                    raise VMError(f"Invalid string data: {token}")
+                i += 1
+                continue
+
+            # Handling opcode
+            opcode = op_2_opcode(token)
+            if opcode is not None:
+                cmds.append(opcode)
+                i += 1
+                continue
+
+            # Handling hex data (0x01~0x4B + hex) / hex opcode
+            if token.startswith("0x") or token.startswith("0X"):
+                try:
+                    length = int(token, 16)
+                except Exception:
+                    raise VMError(f"Invalid hex number: {token}")
+                if not (0x01 <= length <= 0x4B):
+                    if opcode_2_op(length) is None:
+                        cmds.append(int_to_scriptnum(length))
+                    else:
+                        cmds.append(length)
+                    i += 1
+                    continue
+
+                data_bytes = b""
+                cnt = 0
+                is_valid = True
+
+                while len(data_bytes) < length:
+                    cnt += 1
+                    if i + cnt == len(tokens):
+                        is_valid = False
+                        break
+
+                    next_token = tokens[i + cnt]
+                    if not (next_token.startswith("0x") or next_token.startswith("0X")):
+                        if length == 1 and next_token == "1":
+                            next_token = "0x51"
+                        else:
+                            raise VMError(f"Invalid pushdata content: {next_token}")
+
+                    try:
+                        data_bytes += bytes.fromhex(next_token[2:])
+                    except Exception:
+                        raise VMError(f"Invalid hex number: {next_token}")
+
+                    if len(data_bytes) > length:
+                        raise VMError(f"Invalid pushdata content length: {next_token}")
+
+                if is_valid:
+                    cmds.append(data_bytes)
+                    i += cnt + 1
+                else:
+                    cmds.append(int_to_scriptnum(length))
+                    i += 1
+                continue
+
+            # Handling others
+            try:
+                value = int(token)
+                cmds.append(int_to_scriptnum(value))
+            except Exception:
+                raise VMError(f"Invalid token in ASM: {token}")
+            i += 1
 
         return cls(cmds)
 
