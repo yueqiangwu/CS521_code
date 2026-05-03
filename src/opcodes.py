@@ -157,7 +157,7 @@ def op_nop(vm: "BitcoinScriptInterpreter"):
 
 @opcode(0x62)
 def op_ver(vm: "BitcoinScriptInterpreter"):
-    pass
+    vm.push(int_to_scriptnum(vm.trans_type.value))
 
 
 @opcode(0x63)
@@ -601,7 +601,7 @@ def op_numequal(vm: "BitcoinScriptInterpreter"):
 @opcode(0x9D)
 def op_numequalverify(vm: "BitcoinScriptInterpreter"):
     op_numequal(vm)
-    if is_true(vm.pop()):
+    if not is_true(vm.pop()):
         raise VMError("OP_NUMEQUALVERIFY failed")
 
 
@@ -724,7 +724,7 @@ def op_checkmultisig(vm: "BitcoinScriptInterpreter"):
     sigs = [vm.pop() for _ in range(n_sig)]
     sigs.reverse()
 
-    # vm.pop()
+    vm.pop()
 
     success = verify_multisig(pubkeys, sigs, vm.tx_sig_hash)
     vm.push(VM_TRUE if success else VM_FALSE)

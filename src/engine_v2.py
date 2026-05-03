@@ -272,5 +272,5 @@ class BitcoinScriptInterpreterV2:
         ):
             if len(self.stack) < 1 or self.top() != VM_TRUE:
                 self.is_terminated = True
-            else:
-                self.pop()
+            # else:
+            #     self.pop()

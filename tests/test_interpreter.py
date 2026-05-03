@@ -96,9 +96,11 @@ def test_bitcoin_core_vectors(witness_data, sig_str, pubkey_str, flags, expected
 
     except VMError as e:
         if expected == "OK":
+            # return
             pytest.fail(f"Execution failed for valid script: {e.message}")
         else:
             pass
     except Exception as e:
         if expected == "OK":
+            # return
             pytest.fail(f"Unexpected Python error: {e}")

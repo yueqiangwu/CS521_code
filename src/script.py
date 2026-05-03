@@ -18,6 +18,17 @@ class Script:
             opcode_2_op(cmd) if isinstance(cmd, int) else cmd.hex() for cmd in self.cmds
         )
 
+    @staticmethod
+    def _encode_pushdata_prefix(length: int) -> bytes:
+        if length < 0x4C:
+            return bytes([length])
+        elif length <= 0xFF:
+            return bytes([0x4C, length])
+        elif length <= 0xFFFF:
+            return bytes([0x4D]) + length.to_bytes(2, "little")
+        else:
+            return bytes([0x4E]) + length.to_bytes(4, "little")
+
     @classmethod
     def parse(cls, raw_input: str, is_hex: bool = False):
         """
@@ -40,7 +51,7 @@ class Script:
         pattern = r"\{.*?\}|<.*?>|\".*?\"|'.*?'|OP_\w+|\S+"
         tokens = re.findall(pattern, cleaned_content)
 
-        cmds = []
+        result = bytearray()
         i = 0
 
         while i < len(tokens):
@@ -50,16 +61,18 @@ class Script:
             if token.startswith("{") and token.endswith("}"):
                 inner_asm = token[1:-1]
                 inner_script = cls.parse_asm(inner_asm)
-                cmds.append(inner_script.serialize())
+                result.extend(inner_script.serialize())
                 i += 1
                 continue
 
             # Handling hex data (<hex>)
             if token.startswith("<") and token.endswith(">"):
                 try:
-                    cmds.append(bytes.fromhex(token[1:-1]))
+                    data = bytes.fromhex(token[1:-1])
                 except Exception:
                     raise VMError(f"Invalid hex data: {token}")
+                result.extend(cls._encode_pushdata_prefix(len(data)))
+                result.extend(data)
                 i += 1
                 continue
 
@@ -68,75 +81,58 @@ class Script:
                 token.startswith("'") and token.endswith("'")
             ):
                 try:
-                    cmds.append(token[1:-1].encode())
+                    data = token[1:-1].encode()
                 except Exception:
                     raise VMError(f"Invalid string data: {token}")
+                result.extend(cls._encode_pushdata_prefix(len(data)))
+                result.extend(data)
                 i += 1
                 continue
 
             # Handling opcode
             opcode = op_2_opcode(token)
             if opcode is not None:
-                cmds.append(opcode)
+                result.append(opcode)
                 i += 1
                 continue
 
             # Handling hex data (0x01~0x4B + hex) / hex opcode
             if token.startswith("0x") or token.startswith("0X"):
+                hex_body = token[2:]
+                if len(hex_body) % 2 == 1:
+                    hex_body = "0" + hex_body
                 try:
-                    length = int(token, 16)
+                    data = bytes.fromhex(hex_body)
                 except Exception:
-                    raise VMError(f"Invalid hex number: {token}")
-                if not (0x01 <= length <= 0x4B):
-                    if opcode_2_op(length) is None:
-                        cmds.append(int_to_scriptnum(length))
-                    else:
-                        cmds.append(length)
-                    i += 1
-                    continue
+                    raise VMError(f"Invalid hex data: {token}")
 
-                data_bytes = b""
-                cnt = 0
-                is_valid = True
-
-                while len(data_bytes) < length:
-                    cnt += 1
-                    if i + cnt == len(tokens):
-                        is_valid = False
-                        break
-
-                    next_token = tokens[i + cnt]
-                    if not (next_token.startswith("0x") or next_token.startswith("0X")):
-                        if length == 1 and next_token == "1":
-                            next_token = "0x51"
-                        else:
-                            raise VMError(f"Invalid pushdata content: {next_token}")
-
-                    try:
-                        data_bytes += bytes.fromhex(next_token[2:])
-                    except Exception:
-                        raise VMError(f"Invalid hex number: {next_token}")
-
-                    if len(data_bytes) > length:
-                        raise VMError(f"Invalid pushdata content length: {next_token}")
-
-                if is_valid:
-                    cmds.append(data_bytes)
-                    i += cnt + 1
-                else:
-                    cmds.append(int_to_scriptnum(length))
-                    i += 1
+                result.extend(data)
+                i += 1
                 continue
 
-            # Handling others
+            # Handling number
             try:
-                value = int(token)
-                cmds.append(int_to_scriptnum(value))
-            except Exception:
-                raise VMError(f"Invalid token in ASM: {token}")
-            i += 1
+                num = int(token)
+                if num == 0:
+                    result.append(0x00)
+                elif 1 <= num <= 16:
+                    result.append(0x50 + num)
+                elif num == -1:
+                    result.append(0x4F)
+                else:
+                    encoded = int_to_scriptnum(num)
+                    length = len(encoded)
+                    result.extend(cls._encode_pushdata_prefix(length))
+                    result.extend(encoded)
 
-        return cls(cmds)
+                i += 1
+                continue
+            except Exception:
+                pass
+
+            raise VMError(f"Invalid token in ASM: {token}")
+
+        return cls.parse_hex(result.hex())
 
     @classmethod
     def parse_hex(cls, raw_input: str):

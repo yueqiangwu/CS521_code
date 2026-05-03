@@ -190,6 +190,8 @@ def step_vm():
             }
         )
     stack = [x.hex() if isinstance(x, bytes) else str(x) for x in vm.stack]
+    alt_stack = [x.hex() if isinstance(x, bytes) else str(x) for x in vm.alt_stack]
+    vf_stack = vm.vf_stack
 
     return jsonify(
         {
@@ -199,6 +201,8 @@ def step_vm():
             "isValid": vm.is_valid() if vm.is_terminated else None,
             "instructions": instructions,
             "stack": stack,
+            "altStack": alt_stack,
+            "vfStack": vf_stack,
         }
     )
 
