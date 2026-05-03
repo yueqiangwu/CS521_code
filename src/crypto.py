@@ -4,6 +4,12 @@ from ecdsa.ecdsa import curve_secp256k1, generator_secp256k1
 from ecdsa.ellipticcurve import INFINITY, PointJacobi
 
 
+def ripemd160(data: bytes) -> bytes:
+    h = hashlib.new("ripemd160")
+    h.update(data)
+    return h.digest()
+
+
 def hash160(data: bytes) -> bytes:
     sha2 = hashlib.sha256(data).digest()
     h = hashlib.new("ripemd160")
@@ -11,8 +17,17 @@ def hash160(data: bytes) -> bytes:
     return h.digest()
 
 
+def sha1(data: bytes) -> bytes:
+    return hashlib.sha1(data).digest()
+
+
 def sha256(data: bytes) -> bytes:
     return hashlib.sha256(data).digest()
+
+
+def hash256(data: bytes) -> bytes:
+    # Double SHA-256
+    return hashlib.sha256(hashlib.sha256(data).digest()).digest()
 
 
 def generate_sig_pair(tx_hash: bytes) -> tuple[bytes, bytes]:

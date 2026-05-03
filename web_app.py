@@ -5,26 +5,26 @@ Run:  python web_app.py
 Then open http://localhost:5000
 """
 
-import uuid
-import os
 import logging
-import traceback
+import os
+import uuid
 import sys
+import traceback
 
 sys.path.insert(0, "src")
 
-from flask import Flask, jsonify, request, render_template
-from utxo import UTXOSet, TxInput, TxOutput, Transaction, UTXO
-from script import Script
+from cachetools import TTLCache
 from ecdsa import SigningKey, SECP256k1
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+from werkzeug.exceptions import HTTPException
+
 from common import TX_HASH_SIZE, VMError
 from crypto import hash160, sha256, generate_sig_pair
 from engine_v2 import BitcoinScriptInterpreterV2
 from opcodes import opcode_2_op
-from templates import generate_template
-from cachetools import TTLCache
-from flask_cors import CORS
-from werkzeug.exceptions import HTTPException
+from script import Script, generate_template
+from utxo import UTXOSet, TxInput, TxOutput, Transaction, UTXO
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,6 +33,9 @@ logging.basicConfig(
 
 app = Flask(__name__)
 CORS(app)
+
+
+# ---------- Bircoin Script Interpreter Part Start ----------
 
 
 @app.errorhandler(Exception)
@@ -278,6 +281,9 @@ def util_sig():
     pk, sig = generate_sig_pair(tx_hash_bytes)
 
     return jsonify({"sig": sig.hex(), "pubKey": pk.hex()})
+
+
+# ---------- Bircoin Script Interpreter Part End ----------
 
 
 # ── Pre-loaded accounts ───────────────────────────────────────────────────
