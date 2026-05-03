@@ -11,7 +11,7 @@ sys.path.insert(0, "src")
 
 from flask import Flask, jsonify, request, render_template
 
-from utxo import UTXOSet, TxInput, TxOutput, Transaction, UTXO
+from utxo import UTXOSet, TxInput, TxOutput, Transaction, UTXO, _compute_sighash
 from script import Script
 from crypto import hash160, sha256
 from ecdsa import SigningKey, SECP256k1
@@ -77,6 +77,105 @@ def _bip143_script_code_p2wpkh(pubkey_hash: bytes) -> bytes:
     return bytes([0x76, 0xa9, 0x14]) + pubkey_hash + bytes([0x88, 0xac])
 
 SCRIPT_FACTORIES = {"P2PKH": _p2pkh, "P2WPKH": _p2wpkh}
+
+
+# ── Script replay helpers ─────────────────────────────────────────────────
+
+def _fmt_stack_item(item) -> dict:
+    """Format one stack item for JSON (label, hex, short display, type)."""
+    if not isinstance(item, bytes):
+        return {"label": str(item), "hex": "", "short": str(item), "type": "other"}
+    h, n = item.hex(), len(item)
+    if n == 0:
+        return {"label": "OP_0", "hex": "", "short": "∅", "type": "dummy"}
+    if n == 1 and item[0] == 1:
+        return {"label": "TRUE",  "hex": h, "short": "TRUE",  "type": "bool_true"}
+    # Raw ECDSA sig: r(32) ‖ s(32) ‖ SIGHASH_ALL(1) = 65 bytes, last byte 0x01
+    if n == 65 and item[-1] == 0x01:
+        return {"label": "sig",    "hex": h, "short": h[:6] + "…" + h[-4:], "type": "sig"}
+    if n == 64:
+        return {"label": "pubkey", "hex": h, "short": h[:6] + "…" + h[-4:], "type": "pubkey"}
+    if n in (33, 65) and item[0] in (0x02, 0x03, 0x04):
+        return {"label": "pubkey", "hex": h, "short": h[:6] + "…" + h[-4:], "type": "pubkey"}
+    if n == 20:
+        return {"label": "hash160","hex": h, "short": h[:6] + "…" + h[-4:], "type": "hash"}
+    if n == 32:
+        return {"label": "hash256","hex": h, "short": h[:6] + "…" + h[-4:], "type": "hash"}
+    return {"label": "data", "hex": h, "short": (h[:10] + "…") if len(h) > 10 else h, "type": "data"}
+
+
+def _cmd_label(cmd) -> str:
+    """Return human-readable operation name for a script command."""
+    from opcodes import opcode_2_op
+    if isinstance(cmd, bytes):
+        n = len(cmd)
+        if n == 0:          return "PUSH ∅ (OP_0 / dummy)"
+        if n == 65 and cmd[-1] == 0x01:                     return "PUSH <sig>"
+        if n == 64:         return "PUSH <pubkey>"
+        if n in (33, 65) and cmd[0] in (0x02, 0x03, 0x04): return "PUSH <pubkey>"
+        if n == 20:         return "PUSH <hash160>"
+        if n == 32:         return "PUSH <hash256>"
+        return f"PUSH <{cmd.hex()[:8]}…>"
+    name = opcode_2_op(cmd)
+    return name or f"OP_{hex(cmd)}"
+
+
+def _replay_steps(utxo_script_hex: str, script_sig_hexes: list,
+                  witness_hexes: list, sighash_hex: str) -> list:
+    """
+    Run the Bitcoin script VM step-by-step and return a trace list.
+    Each entry: {op, stack, phase, [error], [valid]}
+    """
+    from script import Script
+    from engine import BitcoinScriptInterpreter
+
+    sp   = Script.parse_hex(utxo_script_hex)
+    init = [bytes.fromhex(x) for x in script_sig_hexes] or None
+    wit  = [bytes.fromhex(x) for x in witness_hexes]    or None
+    sh   = bytes.fromhex(sighash_hex)
+
+    vm = BitcoinScriptInterpreter(script=sp, initial_stack=init, witness=wit, tx_sig_hash=sh)
+
+    def cur():  return vm.active_inner_vm if vm.active_inner_vm else vm
+    def snap(): return [_fmt_stack_item(x) for x in cur().stack]
+    def next_op():
+        avm = cur()
+        if avm.pc >= len(avm.script.cmds): return "—"
+        return _cmd_label(avm.script.cmds[avm.pc])
+
+    steps = [{"op": "START", "stack": snap(), "phase": "init"}]
+
+    for _ in range(300):
+        if vm.terminated:
+            break
+        had_inner = vm.active_inner_vm is not None
+
+        # Annotate special transitions before the step executes
+        if not had_inner and vm.pc == 0 and vm._is_witness_program():
+            op = "SegWit detected → inner VM"
+        else:
+            op = next_op()
+
+        try:
+            vm.step()
+        except Exception as e:
+            steps.append({"op": op, "stack": snap(), "phase": "error", "error": str(e)})
+            break
+
+        now_inner = vm.active_inner_vm is not None
+        if   not had_inner and now_inner: phase = "inner_start"
+        elif now_inner:                   phase = "inner"
+        else:                             phase = "outer"
+
+        steps.append({"op": op, "stack": snap(), "phase": phase})
+
+    steps.append({
+        "op":    "✅ VALID" if vm._is_valid() else "❌ INVALID",
+        "stack": [_fmt_stack_item(x) for x in vm.stack],
+        "phase": "result",
+        "valid": vm._is_valid(),
+    })
+    return steps
 
 
 # ── Script metadata helpers ───────────────────────────────────────────────
@@ -198,7 +297,33 @@ def api_state():
 
 @app.route("/api/history")
 def api_history():
-    return jsonify({"history": tx_history[-30:]})
+    # Strip large inputs_replay from list response; replay fetched on demand
+    slim = [{k: v for k, v in r.items() if k != "inputs_replay"}
+            for r in tx_history[-30:]]
+    return jsonify({"history": slim})
+
+
+@app.route("/api/replay", methods=["POST"])
+def api_replay():
+    body      = request.get_json(force=True)
+    txid      = body.get("txid", "")
+    input_idx = int(body.get("input_idx", 0))
+
+    record = next((r for r in tx_history if r.get("txid") == txid), None)
+    if not record or "inputs_replay" not in record:
+        return jsonify({"error": "Replay data not available for this transaction"})
+
+    ri = record["inputs_replay"]
+    if input_idx >= len(ri):
+        return jsonify({"error": f"Input index {input_idx} out of range"})
+
+    d = ri[input_idx]
+    try:
+        steps = _replay_steps(d["utxo_script"], d["script_sig"], d["witness"], d["sighash"])
+    except Exception as e:
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()})
+
+    return jsonify({"script_type": d["script_type"], "steps": steps})
 
 
 @app.route("/api/reset", methods=["POST"])
@@ -401,6 +526,17 @@ def api_transact():
                 sh_hash = tx.sighash(i, utxo.script_pubkey)
                 inp.script_sig = [sk.sign_digest(sh_hash) + b"\x01", pubkey]
 
+        # ── Collect replay data (signed inputs + sighash) ────────────────
+        inputs_replay = []
+        for i, (inp, utxo) in enumerate(zip(tx.inputs, input_utxos)):
+            inputs_replay.append({
+                "script_type": _script_type(utxo.script_pubkey),
+                "utxo_script": utxo.script_pubkey.serialize().hex(),
+                "script_sig":  [x.hex() for x in inp.script_sig],
+                "witness":     [x.hex() for x in inp.witness],
+                "sighash":     _compute_sighash(tx, i, inp, utxo).hex(),
+            })
+
         # ── Validate & apply ──────────────────────────────────────────────
         ok, msg = utxo_set.validate_and_apply(tx)
 
@@ -447,7 +583,8 @@ def api_transact():
                  "type":       _script_type(u.script_pubkey)}
                 for u in input_utxos
             ],
-            "outputs": [_out_record(o, m) for o, m in zip(tx_outputs, tx_output_metas)],
+            "outputs":       [_out_record(o, m) for o, m in zip(tx_outputs, tx_output_metas)],
+            "inputs_replay": inputs_replay,
         }
         if ok:
             tx_history.append(record)

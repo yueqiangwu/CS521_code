@@ -92,6 +92,35 @@
       font-weight: 600;
       color: #475569;
     }
+
+    /* ── Replay modal ── */
+    .stack-row {
+      display: flex; align-items: center; gap: .5rem;
+      padding: .28rem .5rem;
+      border-radius: 6px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      margin-bottom: .2rem;
+      font-family: monospace;
+    }
+    .stack-row.top-item { border-color: #93c5fd; background: #eff6ff; }
+    .stack-badge {
+      padding: .1rem .4rem; border-radius: 4px;
+      font-size: .7rem; font-weight: 700;
+      min-width: 68px; text-align: center; color: #fff;
+    }
+    .stack-badge.sig       { background: #1e1b4b; }
+    .stack-badge.pubkey    { background: #1d4ed8; }
+    .stack-badge.hash      { background: #92400e; }
+    .stack-badge.bool_true { background: #166534; }
+    .stack-badge.dummy     { background: #6b7280; }
+    .stack-badge.data      { background: #374151; }
+    .stack-badge.other     { background: #6b7280; }
+    .op-box {
+      background: #f1f5f9; border: 1px solid #e2e8f0;
+      border-radius: 8px; padding: .5rem .8rem;
+    }
+    .phase-badge { font-size: .65rem; }
   </style>
 </head>
 <body>
@@ -175,6 +204,21 @@
         <button class="btn btn-warning fw-semibold" onclick="createMultisig()">
           🔐 Create Multisig UTXO
         </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Script Execution Replay modal ─────────────────────────────── -->
+<div class="modal fade" id="replayModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header py-2">
+        <h6 class="modal-title fw-bold mb-0" id="replay-title">🔬 Script Execution</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-3" id="replay-body">
+        <div class="text-center text-muted py-4">Loading…</div>
       </div>
     </div>
   </div>
@@ -648,9 +692,12 @@ function renderHistory(hist) {
     return;
   }
   el.innerHTML = [...hist].reverse().map(tx => {
-    const ins  = tx.inputs.map(i =>
-      `<span class="badge bg-${OWNER_COLOR[i.owner]||"secondary"} me-1">${i.owner} ${i.amount?.toLocaleString()}</span>`
-    ).join("");
+    const ins = tx.inputs.map((inp, idx) => {
+      const btn = `<button class="btn py-0 px-1 me-1" style="font-size:.8rem;line-height:1.3"
+                           onclick="openReplay('${tx.txid}',${idx})"
+                           title="Replay script execution">🔬</button>`;
+      return btn + `<span class="badge bg-${OWNER_COLOR[inp.owner]||"secondary"} me-1">${inp.owner} ${inp.amount?.toLocaleString()}</span>`;
+    }).join("");
     const outs = tx.outputs.map(o => {
       if (o.multisig) {
         const ms = o.multisig;
@@ -746,6 +793,109 @@ async function createMultisig() {
   } else {
     flash(`❌ ${result.error}`, "danger");
   }
+}
+
+// ── Script Replay ─────────────────────────────────────────────────────────
+let replaySteps = [];
+let replayIdx   = 0;
+
+async function openReplay(txid, inputIdx) {
+  const modal = new bootstrap.Modal(document.getElementById('replayModal'));
+  document.getElementById('replay-title').textContent = '🔬 Script Execution';
+  document.getElementById('replay-body').innerHTML =
+    '<div class="text-center py-4 text-muted">⏳ Running script execution…</div>';
+  modal.show();
+
+  try {
+    const resp = await fetch('/api/replay', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({txid, input_idx: inputIdx}),
+    });
+    const data = await resp.json();
+    if (data.error) {
+      document.getElementById('replay-body').innerHTML =
+        `<div class="alert alert-danger">${data.error}</div>`;
+      return;
+    }
+    replaySteps = data.steps;
+    replayIdx   = 0;
+    document.getElementById('replay-title').textContent =
+      `🔬 Script Execution — ${data.script_type}`;
+    renderReplayStep();
+  } catch(e) {
+    document.getElementById('replay-body').innerHTML =
+      `<div class="alert alert-danger">Network error: ${e.message}</div>`;
+  }
+}
+
+function renderReplayStep() {
+  if (!replaySteps.length) return;
+  const step  = replaySteps[replayIdx];
+  const total = replaySteps.length;
+
+  const PHASE_LABEL = {
+    init: 'initial state', outer: 'scriptPubKey',
+    inner_start: 'inner script ▸', inner: 'inner script',
+    result: 'final result', error: 'error',
+  };
+
+  const phaseBadge = `<span class="badge bg-secondary phase-badge">${PHASE_LABEL[step.phase] || step.phase}</span>`;
+
+  // Stack (top is last in array → render reversed)
+  let stackHtml;
+  if (!step.stack || !step.stack.length) {
+    stackHtml = '<div class="text-muted small text-center py-2 fst-italic">(empty stack)</div>';
+  } else {
+    stackHtml = [...step.stack].reverse().map((item, ri) => {
+      const isTop = ri === 0;
+      return `<div class="stack-row ${isTop ? 'top-item' : ''}">
+        <span class="text-muted" style="width:16px;text-align:right;font-size:.68rem">${step.stack.length-1-ri}</span>
+        <span class="stack-badge ${item.type}">${item.label}</span>
+        <span class="font-monospace text-secondary" style="font-size:.68rem;flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${item.short}</span>
+        ${isTop ? '<span class="text-primary" style="font-size:.65rem">← top</span>' : ''}
+      </div>`;
+    }).join('');
+  }
+
+  // Final result badge
+  const resultHtml = (step.phase === 'result')
+    ? `<div class="text-center mt-3">
+        <span class="badge px-3 py-2 ${step.valid ? 'bg-success' : 'bg-danger'}" style="font-size:.95rem">
+          ${step.valid ? '✅ Script Valid — UTXO unlocked' : '❌ Script Invalid'}
+        </span>
+       </div>` : '';
+
+  document.getElementById('replay-body').innerHTML = `
+    <div class="d-flex justify-content-between align-items-center mb-2">
+      ${phaseBadge}
+      <span class="text-muted small">Step ${replayIdx + 1} / ${total}</span>
+    </div>
+
+    <div class="op-box mb-3">
+      <div class="text-muted small mb-1">Operation</div>
+      <code class="fw-semibold" style="font-size:.88rem">${step.op}</code>
+      ${step.error ? `<div class="text-danger small mt-1">⚠ ${step.error}</div>` : ''}
+    </div>
+
+    <div class="mb-2">
+      <div class="text-muted small mb-1">Stack <span style="font-size:.65rem">(bottom → top ↑)</span></div>
+      <div style="min-height:48px">${stackHtml}</div>
+    </div>
+
+    ${resultHtml}
+
+    <div class="d-flex justify-content-between align-items-center mt-3 pt-2 border-top">
+      <div class="d-flex gap-1">
+        <button class="btn btn-sm btn-outline-secondary" onclick="replayIdx=0;renderReplayStep()" ${replayIdx===0?'disabled':''}>⏮</button>
+        <button class="btn btn-sm btn-outline-secondary" onclick="replayIdx--;renderReplayStep()" ${replayIdx===0?'disabled':''}>◀ Prev</button>
+      </div>
+      <span class="text-muted small">${replayIdx+1} / ${total}</span>
+      <div class="d-flex gap-1">
+        <button class="btn btn-sm btn-outline-secondary" onclick="replayIdx++;renderReplayStep()" ${replayIdx===total-1?'disabled':''}>Next ▶</button>
+        <button class="btn btn-sm btn-outline-secondary" onclick="replayIdx=replaySteps.length-1;renderReplayStep()" ${replayIdx===total-1?'disabled':''}>⏭</button>
+      </div>
+    </div>`;
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────
