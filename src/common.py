@@ -1,7 +1,7 @@
 from enum import Enum
 
 VM_TRUE = b"\x01"
-VM_FALSE = b"\x00"
+VM_FALSE = b""
 
 
 TX_HASH_SIZE = 32
@@ -9,7 +9,7 @@ TX_HASH_SIZE = 32
 
 class VMError(Exception):
     def __init__(self, message, status_code=400, payload=None):
-        super().__init__()
+        super().__init__(message)
         self.message = message
         self.status_code = status_code
         self.payload = payload
@@ -19,6 +19,10 @@ class VMError(Exception):
         rv["message"] = self.message
         rv["status"] = "error"
         return rv
+
+
+class DisabledOpError(VMError):
+    pass
 
 
 class TransactionType(Enum):

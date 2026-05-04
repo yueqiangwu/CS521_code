@@ -15,7 +15,7 @@ sys.path.insert(0, "src")
 
 from cachetools import TTLCache
 from ecdsa import SigningKey, SECP256k1
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, render_template
 from flask_cors import CORS
 from werkzeug.exceptions import HTTPException
 
@@ -190,6 +190,8 @@ def step_vm():
             }
         )
     stack = [x.hex() if isinstance(x, bytes) else str(x) for x in vm.stack]
+    alt_stack = [x.hex() if isinstance(x, bytes) else str(x) for x in vm.alt_stack]
+    vf_stack = vm.vf_stack
 
     return jsonify(
         {
@@ -199,6 +201,8 @@ def step_vm():
             "isValid": vm.is_valid() if vm.is_terminated else None,
             "instructions": instructions,
             "stack": stack,
+            "altStack": alt_stack,
+            "vfStack": vf_stack,
         }
     )
 
@@ -252,14 +256,12 @@ def util_string():
                     f"Hex string cannot be decoded: {input_text}", status_code=401
                 )
         case "asm2hex":
-            res = Script.parse(input_text).serialize().hex()
+            res = Script._asm_to_hex_bytes(input_text).hex()
         case "hex2asm":
             cmds = Script.parse_hex(input_text).cmds
-            instructions = []
-            for cmd in cmds:
-                instructions.append(
-                    opcode_2_op(cmd) if isinstance(cmd, int) else cmd.hex()
-                )
+            instructions = [
+                opcode_2_op(cmd) if isinstance(cmd, int) else cmd.hex() for cmd in cmds
+            ]
             res = "\n".join(instructions)
         case _:
             raise ValueError(f"Unknown mode: {mode}")
