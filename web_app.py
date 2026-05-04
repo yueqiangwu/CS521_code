@@ -256,14 +256,12 @@ def util_string():
                     f"Hex string cannot be decoded: {input_text}", status_code=401
                 )
         case "asm2hex":
-            res = Script.parse(input_text).serialize().hex()
+            res = Script._asm_to_hex_bytes(input_text).hex()
         case "hex2asm":
             cmds = Script.parse_hex(input_text).cmds
-            instructions = []
-            for cmd in cmds:
-                instructions.append(
-                    opcode_2_op(cmd) if isinstance(cmd, int) else cmd.hex()
-                )
+            instructions = [
+                opcode_2_op(cmd) if isinstance(cmd, int) else cmd.hex() for cmd in cmds
+            ]
             res = "\n".join(instructions)
         case _:
             raise ValueError(f"Unknown mode: {mode}")

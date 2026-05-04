@@ -1,4 +1,4 @@
-from common import VM_TRUE, VM_FALSE, VMError
+from common import VM_TRUE, VM_FALSE, VMError, DisabledOpError
 from crypto import (
     ripemd160,
     sha1,
@@ -43,9 +43,7 @@ def opcode(code: int):
             raise ValueError(f"Operation {op} already registered")
 
         OP_OPCODE_MAP[op] = code
-        op_short = op[3:]
-        if not op_short.isdigit():
-            OP_OPCODE_MAP[op_short] = code
+        OP_OPCODE_MAP[op[3:]] = code
         OPCODE_OP_MAP[code] = op
         OPCODE_FUNC_MAP[code] = func
 
@@ -111,7 +109,7 @@ def is_true(data: bytes) -> bool:
 
 @opcode(0x00)
 def op_0(vm: "BitcoinScriptInterpreter"):
-    vm.push(int_to_scriptnum(0))
+    vm.push(b"")
 
 
 OP_OPCODE_MAP["OP_FALSE"] = 0x00
@@ -136,6 +134,7 @@ def _register_small_ints():
         func = create_op_func(i)
 
         OP_OPCODE_MAP[op_name] = code
+        OP_OPCODE_MAP[op_name[3:]] = code
         OPCODE_OP_MAP[code] = op_name
         OPCODE_FUNC_MAP[code] = func
 
@@ -157,7 +156,7 @@ def op_nop(vm: "BitcoinScriptInterpreter"):
 
 @opcode(0x62)
 def op_ver(vm: "BitcoinScriptInterpreter"):
-    vm.push(int_to_scriptnum(vm.trans_type.value))
+    raise DisabledOpError("Disabled Opcode: OP_VER")
 
 
 @opcode(0x63)
@@ -182,12 +181,12 @@ def op_notif(vm: "BitcoinScriptInterpreter"):
 
 @opcode(0x65)
 def op_verif(vm: "BitcoinScriptInterpreter"):
-    pass
+    raise DisabledOpError("Disabled Opcode: OP_VERIF")
 
 
 @opcode(0x66)
 def op_vernotif(vm: "BitcoinScriptInterpreter"):
-    pass
+    raise DisabledOpError("Disabled Opcode: OP_VERNOTIF")
 
 
 @opcode(0x67)
@@ -710,7 +709,7 @@ def op_checksig(vm: "BitcoinScriptInterpreter"):
 @opcode(0xAD)
 def op_checksigverify(vm: "BitcoinScriptInterpreter"):
     op_checksig(vm)
-    if is_true(vm.pop()):
+    if not is_true(vm.pop()):
         raise VMError("OP_CHECKSIGVERIFY failed")
 
 
@@ -733,7 +732,7 @@ def op_checkmultisig(vm: "BitcoinScriptInterpreter"):
 @opcode(0xAF)
 def op_checkmultisigverify(vm: "BitcoinScriptInterpreter"):
     op_checkmultisig(vm)
-    if is_true(vm.pop()):
+    if not is_true(vm.pop()):
         raise VMError("OP_CHECKMULTISIGVERIFY failed")
 
 

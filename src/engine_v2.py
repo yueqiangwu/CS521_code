@@ -77,7 +77,7 @@ class BitcoinScriptInterpreterV2:
             and isinstance(cmds[1], bytes)
         ):
             # v0
-            if cmds[0] == 0x00:
+            if cmds[0] == 0x00 or cmds[0] == b"":
                 if len(cmds[1]) == 20:
                     return TransactionType.P2WPKH
                 if len(cmds[1]) == 32:
@@ -131,7 +131,11 @@ class BitcoinScriptInterpreterV2:
         script_hash = self.script_pubkey.cmds[1]
 
         # Check if the SHA256 hash of the witness script matches the script hash in scriptPubKey
-        if sha256(witness_script_bytes) != script_hash:
+        try:
+            sha256_value = sha256(witness_script_bytes)
+        except Exception:
+            raise VMError(f"Invalid witness script")
+        if sha256_value != script_hash:
             raise VMError("P2WSH script hash mismatch")
 
         witness_script = Script.parse_hex(witness_script_bytes.hex())
@@ -222,10 +226,16 @@ class BitcoinScriptInterpreterV2:
         return self.stack[-1]
 
     def is_valid(self) -> bool:
-        if not self.is_terminated or len(self.stack) < 1:
+        if not self.is_terminated:
             return False
 
-        return is_true(self.top())
+        if (
+            self.trans_type == TransactionType.P2WPKH
+            or self.trans_type == TransactionType.P2WSH
+        ):
+            return len(self.stack) == 0 or is_true(self.top())
+        else:
+            return is_true(self.top())
 
     # ========== Execute functions ==========
 
@@ -256,7 +266,8 @@ class BitcoinScriptInterpreterV2:
                     self.is_terminated = True
                     raise e
         else:
-            raise VMError(f"Unknown Opcode: {hex(cmd)}")
+            if is_active:
+                raise VMError(f"Unknown Opcode: {hex(cmd)}")
 
         self.pc += 1
         if self.pc == len(self.instructions):
@@ -270,7 +281,7 @@ class BitcoinScriptInterpreterV2:
             and self.instr_types[self.pc - 1] == InstructionType.PUBKEY
             and self.instr_types[self.pc] == InstructionType.REDEEM
         ):
-            if len(self.stack) < 1 or self.top() != VM_TRUE:
+            if len(self.stack) < 1 or not is_true(self.top()):
                 self.is_terminated = True
-            # else:
-            #     self.pop()
+            else:
+                self.pop()

@@ -1,6 +1,6 @@
 import re
 
-from common import VMError, generate_asm_script
+from common import VMError, DisabledOpError, generate_asm_script
 from crypto import generate_sig_pair, hash160, sha256
 from opcodes import op_2_opcode, opcode_2_op, int_to_scriptnum
 
@@ -18,6 +18,39 @@ class Script:
             opcode_2_op(cmd) if isinstance(cmd, int) else cmd.hex() for cmd in self.cmds
         )
 
+    @classmethod
+    def parse(cls, raw_input: str, is_hex: bool = False):
+        """
+        Parse the input HEX/ASM string into a list of instructions
+        """
+        return cls.parse_hex(raw_input) if is_hex else cls.parse_asm(raw_input)
+
+    @classmethod
+    def parse_asm(cls, raw_input: str):
+        hex_bytes = cls._asm_to_hex_bytes(raw_input)
+        cmds = cls._hex_bytes_to_cmds(hex_bytes)
+        return cls(cmds)
+
+    @classmethod
+    def parse_hex(cls, raw_input: str):
+        try:
+            hex_bytes = bytes.fromhex(raw_input)
+        except Exception:
+            raise VMError(f"Invalid hex string: {raw_input}")
+
+        cmds = cls._hex_bytes_to_cmds(hex_bytes)
+        return cls(cmds)
+
+    def serialize(self) -> bytes:
+        result = b""
+        for cmd in self.cmds:
+            if isinstance(cmd, int):
+                result += bytes([cmd])
+            elif isinstance(cmd, bytes):
+                result += self._encode_pushdata_prefix(len(cmd))
+                result += cmd
+        return result
+
     @staticmethod
     def _encode_pushdata_prefix(length: int) -> bytes:
         if length < 0x4C:
@@ -29,74 +62,56 @@ class Script:
         else:
             return bytes([0x4E]) + length.to_bytes(4, "little")
 
-    @classmethod
-    def parse(cls, raw_input: str, is_hex: bool = False):
-        """
-        Parse the input HEX/ASM string into a list of instructions
-        """
-        return cls.parse_hex(raw_input) if is_hex else cls.parse_asm(raw_input)
-
-    @classmethod
-    def parse_asm(cls, raw_input: str):
-        # remove notes
+    @staticmethod
+    def _asm_to_hex_bytes(raw_input: str) -> bytes:
+        # remove description: //...
         lines = raw_input.split("\n")
-        cleaned_content = " ".join(line.split("#")[0].strip() for line in lines)
-
-        # Valid token:
-        # opcodes: (OP_)xxx
-        # pushdata: <hex> / 0x01~0x4B + hex
-        # hex script: {script}
-        # number: 10 base
-        # string: "str" / 'str'
-        pattern = r"\{.*?\}|<.*?>|\".*?\"|'.*?'|OP_\w+|\S+"
+        cleaned_content = " ".join(line.split("//")[0].strip() for line in lines)
+        # parse all tokens
+        pattern = r"#.*?#|\{.*?\}|<.*?>|\".*?\"|'.*?'|OP_\w+|\S+"
         tokens = re.findall(pattern, cleaned_content)
 
-        result = bytearray()
+        result = b""
         i = 0
 
         while i < len(tokens):
             token = tokens[i]
+            i += 1
 
-            # Handling nested ASM blocks
+            # Handling complier commands: #...#
+            if token.startswith("#") and token.endswith("#"):
+                inner_asm = token[1:-1]
+                raise DisabledOpError("Complier command not supported")
+            # Handling nested ASM blocks: {...}
             if token.startswith("{") and token.endswith("}"):
                 inner_asm = token[1:-1]
-                inner_script = cls.parse_asm(inner_asm)
-                result.extend(inner_script.serialize())
-                i += 1
+                result += Script._asm_to_hex_bytes(inner_asm)
                 continue
-
-            # Handling hex data (<hex>)
+            # Handling hex data: <...>
             if token.startswith("<") and token.endswith(">"):
                 try:
                     data = bytes.fromhex(token[1:-1])
                 except Exception:
                     raise VMError(f"Invalid hex data: {token}")
-                result.extend(cls._encode_pushdata_prefix(len(data)))
-                result.extend(data)
-                i += 1
+                result += Script._encode_pushdata_prefix(len(data))
+                result += data
                 continue
-
-            # Handling string
+            # Handling string: "..."/'...'
             if (token.startswith('"') and token.endswith('"')) or (
                 token.startswith("'") and token.endswith("'")
             ):
                 try:
                     data = token[1:-1].encode()
                 except Exception:
-                    raise VMError(f"Invalid string data: {token}")
-                result.extend(cls._encode_pushdata_prefix(len(data)))
-                result.extend(data)
-                i += 1
+                    raise VMError(f"Invalid string: {token}")
+                result += Script._encode_pushdata_prefix(len(data))
+                result += data
                 continue
-
-            # Handling opcode
-            opcode = op_2_opcode(token)
-            if opcode is not None:
-                result.append(opcode)
-                i += 1
+            # Handling opcode: (OP_)...
+            if (opcode := op_2_opcode(token)) is not None:
+                result += bytes([opcode])
                 continue
-
-            # Handling hex data (0x01~0x4B + hex) / hex opcode
+            # Handling pushdata: 0x01~0x4B + 0x...
             if token.startswith("0x") or token.startswith("0X"):
                 hex_body = token[2:]
                 if len(hex_body) % 2 == 1:
@@ -105,48 +120,29 @@ class Script:
                     data = bytes.fromhex(hex_body)
                 except Exception:
                     raise VMError(f"Invalid hex data: {token}")
-
-                result.extend(data)
-                i += 1
+                result += data
                 continue
-
             # Handling number
             try:
-                num = int(token)
-                if num == 0:
-                    result.append(0x00)
-                elif 1 <= num <= 16:
-                    result.append(0x50 + num)
-                elif num == -1:
-                    result.append(0x4F)
-                else:
-                    encoded = int_to_scriptnum(num)
-                    length = len(encoded)
-                    result.extend(cls._encode_pushdata_prefix(length))
-                    result.extend(encoded)
-
-                i += 1
+                data = int_to_scriptnum(int(token))
+                result += Script._encode_pushdata_prefix(len(data))
+                result += data
                 continue
             except Exception:
                 pass
 
             raise VMError(f"Invalid token in ASM: {token}")
 
-        return cls.parse_hex(result.hex())
+        return result
 
-    @classmethod
-    def parse_hex(cls, raw_input: str):
-        try:
-            raw = bytes.fromhex(raw_input)
-        except Exception:
-            raise VMError("Invalid hex string")
-
-        length = len(raw)
+    @staticmethod
+    def _hex_bytes_to_cmds(hex_bytes: bytes) -> list[bytes | int]:
+        length = len(hex_bytes)
         i = 0
         cmds = []
 
         while i < length:
-            current = raw[i]
+            current = hex_bytes[i]
             i += 1
 
             # push data (0x01 ~ 0x4b)
@@ -155,73 +151,50 @@ class Script:
                 if i + n > length:
                     raise VMError("Out of range")
 
-                data = raw[i : i + n]
-                cmds.append(data)
+                data = hex_bytes[i : i + n]
                 i += n
+                cmds.append(data)
             # OP_PUSHDATA1 (0x4c)
             elif current == 0x4C:
                 if i > length:
                     raise VMError("Missing length byte")
-                n = raw[i]
+                n = hex_bytes[i]
                 i += 1
-
                 if i + n > length:
                     raise VMError("Out of range")
 
-                data = raw[i : i + n]
-                cmds.append(data)
+                data = hex_bytes[i : i + n]
                 i += n
+                cmds.append(data)
             # OP_PUSHDATA2 (0x4d)
             elif current == 0x4D:
                 if i + 1 >= length:
                     raise VMError("Missing length byte")
-
-                n = int.from_bytes(raw[i : i + 2], "little")
+                n = int.from_bytes(hex_bytes[i : i + 2], "little")
                 i += 2
-
                 if i + n > length:
                     raise VMError("Out of range")
 
-                data = raw[i : i + n]
-                cmds.append(data)
+                data = hex_bytes[i : i + n]
                 i += n
+                cmds.append(data)
             # OP_PUSHDATA4 (0x4e)
             elif current == 0x4E:
                 if i + 3 >= length:
                     raise VMError("Missing length byte")
-
-                n = int.from_bytes(raw[i : i + 4], "little")
+                n = int.from_bytes(hex_bytes[i : i + 4], "little")
                 i += 4
-
                 if i + n > length:
                     raise VMError("Out of range")
 
-                data = raw[i : i + n]
-                cmds.append(data)
+                data = hex_bytes[i : i + n]
                 i += n
+                cmds.append(data)
             # other opcodes
             else:
                 cmds.append(current)
 
-        return cls(cmds)
-
-    def serialize(self) -> bytes:
-        result = b""
-        for cmd in self.cmds:
-            if isinstance(cmd, int):
-                result += bytes([cmd])
-            elif isinstance(cmd, bytes):
-                length = len(cmd)
-                if length < 0x4C:
-                    result += bytes([length])
-                elif length <= 0xFF:
-                    result += bytes([0x4C, length])
-                elif length <= 0xFFFF:
-                    result += bytes([0x4D]) + length.to_bytes(2, "little")
-                else:
-                    result += bytes([0x4E]) + length.to_bytes(4, "little")
-                result += cmd
-        return result
+        return cmds
 
 
 def generate_template(transaction_type: str, tx_hash: bytes) -> tuple[str, str, str]:
@@ -239,8 +212,6 @@ def generate_template(transaction_type: str, tx_hash: bytes) -> tuple[str, str, 
             return generate_p2wpkh_template(tx_hash)
         case "P2WSH":
             return generate_p2wsh_template(tx_hash)
-        case "P2TR":
-            return generate_p2tr_template(tx_hash)
         case _:
             raise ValueError(f"Unknown transaction type: {transaction_type}")
 
@@ -248,8 +219,8 @@ def generate_template(transaction_type: str, tx_hash: bytes) -> tuple[str, str, 
 def generate_p2pk_template(tx_hash: bytes) -> tuple[str, str, str]:
     pk, sig = generate_sig_pair(tx_hash)
 
-    scriptSig = generate_asm_script("<{}> # sig", sig)
-    scriptPubkey = generate_asm_script("<{}> # pubkey\nOP_CHECKSIG", pk)
+    scriptSig = generate_asm_script("<{}> // sig", sig)
+    scriptPubkey = generate_asm_script("<{}> // pubkey\nOP_CHECKSIG", pk)
 
     return (scriptSig, scriptPubkey, "")
 
@@ -258,9 +229,9 @@ def generate_p2pkh_template(tx_hash: bytes) -> tuple[str, str, str]:
     pk, sig = generate_sig_pair(tx_hash)
     pkh = hash160(pk)
 
-    scriptSig = generate_asm_script("<{}> # sig\n<{}> # pubkey", sig, pk)
+    scriptSig = generate_asm_script("<{}> // sig\n<{}> // pubkey", sig, pk)
     scriptPubkey = generate_asm_script(
-        "OP_DUP\nOP_HASH160\n<{}> # pubkey hash\nOP_EQUALVERIFY\nOP_CHECKSIG", pkh
+        "OP_DUP\nOP_HASH160\n<{}> // pubkey hash\nOP_EQUALVERIFY\nOP_CHECKSIG", pkh
     )
 
     return (scriptSig, scriptPubkey, "")
@@ -270,19 +241,19 @@ def generate_p2sh_template(tx_hash: bytes) -> tuple[str, str, str]:
     pk1, sig1 = generate_sig_pair(tx_hash)
     pk2, sig2 = generate_sig_pair(tx_hash)
     redeem_script_asm = generate_asm_script(
-        "OP_2\n<{}>\n<{}> # pubkey1 pubkey2 ...\nOP_2\nOP_CHECKMULTISIG", pk1, pk2
+        "OP_2\n<{}>\n<{}> // pubkey1 pubkey2 ...\nOP_2\nOP_CHECKMULTISIG", pk1, pk2
     )
     redeem_script_bytes = Script.parse(redeem_script_asm).serialize()
     redeem_script_hash = hash160(redeem_script_bytes)
 
     scriptSig = generate_asm_script(
-        "<{}>\n<{}> # sig1 sig2 ...\n{{\n{}\n}} # redeem script hex",
+        "<{}>\n<{}> // sig1 sig2 ...\n{{\n{}\n}} // redeem script hex",
         sig1,
         sig2,
         redeem_script_asm,
     )
     scriptPubkey = generate_asm_script(
-        "OP_HASH160\n<{}> # redeem script hash\nOP_EQUAL", redeem_script_hash
+        "OP_HASH160\n<{}> // redeem script hash\nOP_EQUAL", redeem_script_hash
     )
 
     return (scriptSig, scriptPubkey, "")
@@ -292,8 +263,8 @@ def generate_p2wpkh_template(tx_hash: bytes) -> tuple[str, str, str]:
     pk, sig = generate_sig_pair(tx_hash)
     pkh = hash160(pk)
 
-    scriptPubkey = generate_asm_script("OP_0\n<{}> # pubkey hash", pkh)
-    witness = generate_asm_script("<{}> # sig\n<{}> # pubkey", sig, pk)
+    scriptPubkey = generate_asm_script("OP_0\n<{}> // pubkey hash", pkh)
+    witness = generate_asm_script("<{}> // sig\n<{}> // pubkey", sig, pk)
 
     return ("", scriptPubkey, witness)
 
@@ -305,26 +276,10 @@ def generate_p2wsh_template(tx_hash: bytes) -> tuple[str, str, str]:
     witness_script_hash = sha256(witness_script_bytes)
 
     scriptPubkey = generate_asm_script(
-        "OP_0\n<{}> # witness script hash", witness_script_hash
+        "OP_0\n<{}> // witness script hash", witness_script_hash
     )
     witness = generate_asm_script(
-        "<{}> # sig\n{{\n{}\n}} # witness script", sig, witness_script_asm
-    )
-
-    return ("", scriptPubkey, witness)
-
-
-def generate_p2tr_template(tx_hash: bytes) -> tuple[str, str, str]:
-    pk, sig = generate_sig_pair(tx_hash)
-    witness_script_asm = generate_asm_script("<{}> # pubkey\nOP_CHECKSIG", pk)
-    witness_script_bytes = Script.parse(witness_script_asm).serialize()
-    witness_script_hash = sha256(witness_script_bytes)
-
-    scriptPubkey = generate_asm_script(
-        "OP_1\n<{}> # witness script hash", witness_script_hash
-    )
-    witness = generate_asm_script(
-        "<{}> # sig\n{{\n{}\n}} # witness script", sig, witness_script_asm
+        "<{}> // sig\n{{\n{}\n}} // witness script", sig, witness_script_asm
     )
 
     return ("", scriptPubkey, witness)
