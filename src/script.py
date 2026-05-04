@@ -68,7 +68,7 @@ class Script:
         lines = raw_input.split("\n")
         cleaned_content = " ".join(line.split("//")[0].strip() for line in lines)
         # parse all tokens
-        pattern = r"#.*?#|\{.*?\}|<.*?>|\".*?\"|'.*?'|OP_\w+|\S+"
+        pattern = r"#.*?#|\{.*?\}|<.*?>|\[.*?\]|\".*?\"|'.*?'|OP_\w+|\S+"
         tokens = re.findall(pattern, cleaned_content)
 
         result = b""
@@ -80,15 +80,17 @@ class Script:
 
             # Handling complier commands: #...#
             if token.startswith("#") and token.endswith("#"):
-                inner_asm = token[1:-1]
                 raise DisabledOpError("Complier command not supported")
             # Handling nested ASM blocks: {...}
             if token.startswith("{") and token.endswith("}"):
-                inner_asm = token[1:-1]
-                result += Script._asm_to_hex_bytes(inner_asm)
+                data = Script._asm_to_hex_bytes(token[1:-1])
+                result += Script._encode_pushdata_prefix(len(data))
+                result += data
                 continue
-            # Handling hex data: <...>
-            if token.startswith("<") and token.endswith(">"):
+            # Handling hex data: [...]/<...>
+            if (token.startswith("[") and token.endswith("]")) or (
+                token.startswith("<") and token.endswith(">")
+            ):
                 try:
                     data = bytes.fromhex(token[1:-1])
                 except Exception:
@@ -219,8 +221,8 @@ def generate_template(transaction_type: str, tx_hash: bytes) -> tuple[str, str, 
 def generate_p2pk_template(tx_hash: bytes) -> tuple[str, str, str]:
     pk, sig = generate_sig_pair(tx_hash)
 
-    scriptSig = generate_asm_script("<{}> // sig", sig)
-    scriptPubkey = generate_asm_script("<{}> // pubkey\nOP_CHECKSIG", pk)
+    scriptSig = generate_asm_script("[{}] // sig", sig)
+    scriptPubkey = generate_asm_script("[{}] // pubkey\nOP_CHECKSIG", pk)
 
     return (scriptSig, scriptPubkey, "")
 
@@ -229,9 +231,9 @@ def generate_p2pkh_template(tx_hash: bytes) -> tuple[str, str, str]:
     pk, sig = generate_sig_pair(tx_hash)
     pkh = hash160(pk)
 
-    scriptSig = generate_asm_script("<{}> // sig\n<{}> // pubkey", sig, pk)
+    scriptSig = generate_asm_script("[{}] // sig\n[{}] // pubkey", sig, pk)
     scriptPubkey = generate_asm_script(
-        "OP_DUP\nOP_HASH160\n<{}> // pubkey hash\nOP_EQUALVERIFY\nOP_CHECKSIG", pkh
+        "OP_DUP\nOP_HASH160\n[{}] // pubkey hash\nOP_EQUALVERIFY\nOP_CHECKSIG", pkh
     )
 
     return (scriptSig, scriptPubkey, "")
@@ -241,19 +243,21 @@ def generate_p2sh_template(tx_hash: bytes) -> tuple[str, str, str]:
     pk1, sig1 = generate_sig_pair(tx_hash)
     pk2, sig2 = generate_sig_pair(tx_hash)
     redeem_script_asm = generate_asm_script(
-        "OP_2\n<{}>\n<{}> // pubkey1 pubkey2 ...\nOP_2\nOP_CHECKMULTISIG", pk1, pk2
+        "OP_2 //sig num\n// pubkey1 pubkey2 ...\n[{}]\n[{}]\nOP_2 //pubkey num\nOP_CHECKMULTISIG",
+        pk1,
+        pk2,
     )
-    redeem_script_bytes = Script.parse(redeem_script_asm).serialize()
+    redeem_script_bytes = Script._asm_to_hex_bytes(redeem_script_asm)
     redeem_script_hash = hash160(redeem_script_bytes)
 
     scriptSig = generate_asm_script(
-        "<{}>\n<{}> // sig1 sig2 ...\n{{\n{}\n}} // redeem script hex",
+        "OP_0 // dummy\n// sig1 sig2 ...\n[{}]\n[{}]\n// redeem script hex\n{{\n{}\n}}",
         sig1,
         sig2,
         redeem_script_asm,
     )
     scriptPubkey = generate_asm_script(
-        "OP_HASH160\n<{}> // redeem script hash\nOP_EQUAL", redeem_script_hash
+        "OP_HASH160\n[{}] // redeem script hash\nOP_EQUAL", redeem_script_hash
     )
 
     return (scriptSig, scriptPubkey, "")
@@ -263,23 +267,23 @@ def generate_p2wpkh_template(tx_hash: bytes) -> tuple[str, str, str]:
     pk, sig = generate_sig_pair(tx_hash)
     pkh = hash160(pk)
 
-    scriptPubkey = generate_asm_script("OP_0\n<{}> // pubkey hash", pkh)
-    witness = generate_asm_script("<{}> // sig\n<{}> // pubkey", sig, pk)
+    scriptPubkey = generate_asm_script("OP_0\n[{}] // pubkey hash", pkh)
+    witness = generate_asm_script("[{}] // sig\n[{}] // pubkey", sig, pk)
 
     return ("", scriptPubkey, witness)
 
 
 def generate_p2wsh_template(tx_hash: bytes) -> tuple[str, str, str]:
     pk, sig = generate_sig_pair(tx_hash)
-    witness_script_asm = generate_asm_script("<{}> # pubkey\nOP_CHECKSIG", pk)
-    witness_script_bytes = Script.parse(witness_script_asm).serialize()
+    witness_script_asm = generate_asm_script("[{}] // pubkey\nOP_CHECKSIG", pk)
+    witness_script_bytes = Script._asm_to_hex_bytes(witness_script_asm)
     witness_script_hash = sha256(witness_script_bytes)
 
     scriptPubkey = generate_asm_script(
-        "OP_0\n<{}> // witness script hash", witness_script_hash
+        "OP_0\n[{}] // witness script hash", witness_script_hash
     )
     witness = generate_asm_script(
-        "<{}> // sig\n{{\n{}\n}} // witness script", sig, witness_script_asm
+        "[{}] // sig\n// witness script\n{{\n{}\n}}", sig, witness_script_asm
     )
 
     return ("", scriptPubkey, witness)

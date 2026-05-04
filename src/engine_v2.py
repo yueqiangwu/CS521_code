@@ -112,7 +112,7 @@ class BitcoinScriptInterpreterV2:
         # Construct the equivalent P2PKH script
         # <sig> <pubkey> OP_DUP OP_HASH160 <pubkey_hash> OP_EQUALVERIFY OP_CHECKSIG
         p2pkh_script = generate_p2pkh_script(sig, pubkey, pubkey_hash)
-        p2pkh_script_cmds = Script.parse(p2pkh_script).cmds
+        p2pkh_script_cmds = Script.parse_asm(p2pkh_script).cmds
 
         self.pc = 2
         self.instructions.extend(self.script_pubkey.cmds)
@@ -134,21 +134,21 @@ class BitcoinScriptInterpreterV2:
         try:
             sha256_value = sha256(witness_script_bytes)
         except Exception:
-            raise VMError(f"Invalid witness script")
+            raise VMError(f"Invalid witness script: {witness_script_bytes}")
         if sha256_value != script_hash:
             raise VMError("P2WSH script hash mismatch")
 
-        witness_script = Script.parse_hex(witness_script_bytes.hex())
+        witness_script_cmds = Script._hex_bytes_to_cmds(witness_script_bytes)
 
         # Execute the witness script with the args as the initial stack
         self.pc = 2
         self.instructions.extend(self.script_pubkey.cmds)
         self.instructions.extend(args)
-        self.instructions.extend(witness_script.cmds)
+        self.instructions.extend(witness_script_cmds)
         self.instr_types.extend(InstructionType.DISABLED for _ in range(2))
         self.instr_types.extend(InstructionType.WITNESS_ARG for _ in range(len(args)))
         self.instr_types.extend(
-            InstructionType.WITNESS for _ in range(len(witness_script.cmds))
+            InstructionType.WITNESS for _ in range(len(witness_script_cmds))
         )
 
     def _initialize_p2tr(self) -> bool:
@@ -163,13 +163,17 @@ class BitcoinScriptInterpreterV2:
         script_hash = self.script_pubkey.cmds[1]
 
         # Check if the SHA256 hash of the witness script matches the script hash in scriptPubKey
-        if sha256(witness_script_bytes) != script_hash:
+        try:
+            sha256_value = sha256(witness_script_bytes)
+        except Exception:
+            raise VMError(f"Invalid witness script: {witness_script_bytes}")
+        if sha256_value != script_hash:
             raise VMError("P2WSH script hash mismatch")
 
-        witness_script = Script.parse_hex(witness_script_bytes.hex())
+        witness_script_cmds = Script._hex_bytes_to_cmds(witness_script_bytes)
 
         sig = args[0]
-        pubkey = witness_script.cmds[0]
+        pubkey = witness_script_cmds[0]
 
         if verify_schnorr(pubkey, sig, self.tx_sig_hash):
             self.push(VM_TRUE)
@@ -185,17 +189,17 @@ class BitcoinScriptInterpreterV2:
         redeem_script_bytes = self.script_sig.cmds[-1]
         args = self.script_sig.cmds
 
-        redeem_script = Script.parse_hex(redeem_script_bytes.hex())
+        redeem_script_cmds = Script._hex_bytes_to_cmds(redeem_script_bytes)
 
         self.instructions.extend(args)
         self.instructions.extend(self.script_pubkey.cmds)
-        self.instructions.extend(redeem_script.cmds)
+        self.instructions.extend(redeem_script_cmds)
         self.instr_types.extend(InstructionType.SIG for _ in range(len(args)))
         self.instr_types.extend(
             InstructionType.PUBKEY for _ in range(len(self.script_pubkey.cmds))
         )
         self.instr_types.extend(
-            InstructionType.REDEEM for _ in range(len(redeem_script.cmds))
+            InstructionType.REDEEM for _ in range(len(redeem_script_cmds))
         )
 
     def _initialize_legacy(self):
