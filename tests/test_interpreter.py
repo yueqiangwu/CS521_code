@@ -106,13 +106,13 @@ def test_bitcoin_core_vectors(witness_data, sig_str, pubkey_str, flags, expected
     except Exception as e:
         if e.__class__.__name__ == "DisabledOpError":
             pass
-        elif len(witness_data) > 0 and witness_data[0] == "":
-            pass
-        elif (
-            pubkey_str.find("CHECKSIG") != -1
-            or pubkey_str.find("CHECKMULTISIG") != -1
-            or flags.find("WITNESS_PUBKEYTYPE") != -1
-        ):
-            pass
+        # elif len(witness_data) > 0 and witness_data[0] == "":
+        #     pass
+        # elif (
+        #     pubkey_str.find("CHECKSIG") != -1
+        #     or pubkey_str.find("CHECKMULTISIG") != -1
+        #     or flags.find("WITNESS_PUBKEYTYPE") != -1
+        # ):
+        #     pass
         elif expected == "OK":
             pytest.fail(f"Unexpected Python error: {e}")
