@@ -15,7 +15,7 @@ sys.path.insert(0, "src")
 
 from cachetools import TTLCache
 from ecdsa import SigningKey, SECP256k1
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, render_template
 from flask_cors import CORS
 from werkzeug.exceptions import HTTPException
 

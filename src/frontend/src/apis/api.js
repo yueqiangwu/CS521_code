@@ -28,6 +28,26 @@ const getUtilsSig = (txHash) => {
   return api.get(`/utils/sig?txHash=${txHash}`);
 };
 
+const getVisualizerState = () => {
+  return api.get("/state");
+};
+
+const getVisualizerHistory = () => {
+  return api.get("/history");
+};
+
+const postTransaction = (payload) => {
+  return api.post("/transact", payload);
+};
+
+const postCreateMultisig = (payload) => {
+  return api.post("/create_multisig", payload);
+};
+
+const postResetState = () => {
+  return api.post("/reset");
+};
+
 export {
   postInit,
   getTemplatesOptions,
@@ -36,4 +56,9 @@ export {
   postClear,
   getUtilsString,
   getUtilsSig,
+  getVisualizerState,
+  getVisualizerHistory,
+  postTransaction,
+  postCreateMultisig,
+  postResetState,
 };

@@ -1,20 +1,41 @@
-import { Layout, Typography } from 'antd';
+import React from 'react';
+import { BrowserRouter, Routes, Route, Link } from 'react-router-dom';
+import { Layout, Menu } from 'antd';
+import { CodeOutlined, SwapOutlined } from '@ant-design/icons';
 
-import Editor from './components/BSEditor';
+import BitcoinScriptEditor from './pages/BitcoinScriptEditor';
+import UTXOVisualizer from './pages/UTXOVisualizer';
 
 const { Header, Content } = Layout;
-const { Title } = Typography;
 
-export default function BitcoinIDE() {
+export default function App() {
   return (
-    <Layout style={{ minHeight: '100vh', background: '#141414' }}>
-      <Header style={{ background: '#001529', display: 'flex', alignItems: 'center' }}>
-        <Title level={3} style={{ color: 'white', margin: 0 }}>Bitcoin Script Visual Interpreter</Title>
-      </Header>
+    <BrowserRouter>
+      <Layout style={{ minHeight: '100vh', background: '#141414' }}>
+        <Header style={{ display: 'flex', alignItems: 'center', background: '#001529' }}>
+          <div style={{ color: 'white', fontSize: '18px', fontWeight: 'bold', marginRight: '40px' }}>
+            Bitcoin Tools
+          </div>
 
-      <Content style={{ padding: '20px' }}>
-        <Editor />
-      </Content>
-    </Layout>
+          <Menu theme="dark" mode="horizontal" defaultSelectedKeys={['1']}>
+            <Menu.Item key="1" icon={<CodeOutlined />}>
+              <Link to="/">Script Interpreter</Link>
+            </Menu.Item>
+            <Menu.Item key="2" icon={<SwapOutlined />}>
+              <Link to="/visualizer">UTXO Visualizer</Link>
+            </Menu.Item>
+          </Menu>
+        </Header>
+
+        <Content style={{ padding: '24px' }}>
+          <Routes>
+            <Route path="/" element={<BitcoinScriptEditor />} />
+          </Routes>
+          <Routes>
+            <Route path="/visualizer" element={<UTXOVisualizer />} />
+          </Routes>
+        </Content>
+      </Layout>
+    </BrowserRouter>
   );
 }
