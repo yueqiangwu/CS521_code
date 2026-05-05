@@ -13,7 +13,7 @@ from flask import Flask, jsonify, request, render_template
 
 from utxo import UTXOSet, TxInput, TxOutput, Transaction, UTXO, _compute_sighash
 from script import Script
-from crypto import hash160, sha256
+from crypto import hash160, sha256, sign_schnorr, sign_schnorr_musig, aggregate_pubkeys
 from ecdsa import SigningKey, SECP256k1
 
 app = Flask(__name__)
@@ -22,13 +22,16 @@ app = Flask(__name__)
 
 def _make_account(privkey_int: int):
     sk = SigningKey.from_string(privkey_int.to_bytes(32, "big"), curve=SECP256k1)
-    pk = sk.get_verifying_key().to_string()
+    vk = sk.get_verifying_key()
+    pk = vk.to_string()          # 64-byte x||y (no prefix)
     ph = hash160(pk)
+    xonly = pk[:32]              # x-coordinate = x-only pubkey for P2TR (BIP340)
     return {
-        "privkey_int": privkey_int,
-        "pubkey":      pk.hex(),
-        "pubkey_hash": ph.hex(),
-        "address":     ph.hex()[:12] + "…",
+        "privkey_int":  privkey_int,
+        "pubkey":       pk.hex(),
+        "pubkey_hash":  ph.hex(),
+        "address":      ph.hex()[:12] + "…",
+        "xonly_pubkey": xonly.hex(),
     }
 
 ACCOUNTS = {
@@ -71,6 +74,10 @@ def _p2wsh_multisig(m: int, signers: list[str]) -> tuple[Script, bytes]:
     sh       = sha256(ws_bytes)
     sp       = Script.parse(f"OP_0 <{sh.hex()}>")
     return sp, ws_bytes
+
+def _p2tr_script(xonly_pubkey: bytes) -> Script:
+    """P2TR scriptPubKey: OP_1 <32-byte-x-only-pubkey> (BIP341)."""
+    return Script.parse(f"OP_1 <{xonly_pubkey.hex()}>")
 
 def _bip143_script_code_p2wpkh(pubkey_hash: bytes) -> bytes:
     """BIP143 scriptCode for P2WPKH: the equivalent P2PKH script."""
@@ -152,7 +159,10 @@ def _replay_steps(utxo_script_hex: str, script_sig_hexes: list,
 
         # Annotate special transitions before the step executes
         if not had_inner and vm.pc == 0 and vm._is_witness_program():
-            op = "SegWit detected → inner VM"
+            if vm.script.cmds[0] == 0x51:
+                op = "P2TR: verify Schnorr signature"
+            else:
+                op = "SegWit detected → inner VM"
         else:
             op = next_op()
 
@@ -207,6 +217,15 @@ def _owner(sp: Script) -> str:
         if sh in witness_script_info:
             return witness_script_info[sh]["signers"][0]
         return "P2WSH"
+    # P2TR — match x-only pubkey (single-key) or aggregate key (MuSig)
+    if len(c) == 2 and c[0] == 0x51 and isinstance(c[1], bytes) and len(c[1]) == 32:
+        xonly = c[1].hex()
+        for name, acct in ACCOUNTS.items():
+            if acct["xonly_pubkey"] == xonly:
+                return name
+        if xonly in p2tr_musig_info:
+            return p2tr_musig_info[xonly]["signers"][0]
+        return "P2TR"
     # P2PKH / P2WPKH — match pubkey hash
     h = None
     if len(c) == 5 and c[0] == 0x76 and isinstance(c[2], bytes):
@@ -242,6 +261,12 @@ def _utxo_dict(u: UTXO) -> dict:
             sh = c[1].hex()
             if sh in witness_script_info:
                 d["multisig"] = witness_script_info[sh]
+    elif stype == "P2TR":
+        c = u.script_pubkey.cmds
+        if len(c) == 2 and isinstance(c[1], bytes):
+            agg_hex = c[1].hex()
+            if agg_hex in p2tr_musig_info:
+                d["multisig"] = p2tr_musig_info[agg_hex]
     return d
 
 
@@ -253,25 +278,33 @@ redeem_scripts:      dict[str, bytes] = {}   # hash160_hex → redeem_script_byt
 multisig_info:       dict[str, dict]  = {}   # hash160_hex → {m, n, signers}       (P2SH)
 witness_scripts:     dict[str, bytes] = {}   # sha256_hex  → witness_script_bytes  (P2WSH)
 witness_script_info: dict[str, dict]  = {}   # sha256_hex  → {m, n, signers}       (P2WSH)
+p2tr_musig_info:     dict[str, dict]  = {}   # xonly_agg_hex → {m, n, signers}     (P2TR MuSig)
 
 GENESIS_TXID = b"\x00" * 32
 
 def _seed():
     global utxo_set, tx_history, redeem_scripts, multisig_info
-    global witness_scripts, witness_script_info
+    global witness_scripts, witness_script_info, p2tr_musig_info
     utxo_set             = UTXOSet()
     tx_history           = []
     redeem_scripts       = {}
     multisig_info        = {}
     witness_scripts      = {}
     witness_script_info  = {}
-    alice_pk   = bytes.fromhex(ACCOUNTS["Alice"]["pubkey"])
-    bob_pk     = bytes.fromhex(ACCOUNTS["Bob"]["pubkey"])
-    charlie_pk = bytes.fromhex(ACCOUNTS["Charlie"]["pubkey"])
+    p2tr_musig_info      = {}
+    alice_pk      = bytes.fromhex(ACCOUNTS["Alice"]["pubkey"])
+    bob_pk        = bytes.fromhex(ACCOUNTS["Bob"]["pubkey"])
+    charlie_pk    = bytes.fromhex(ACCOUNTS["Charlie"]["pubkey"])
+    alice_xonly   = bytes.fromhex(ACCOUNTS["Alice"]["xonly_pubkey"])
+    bob_xonly     = bytes.fromhex(ACCOUNTS["Bob"]["xonly_pubkey"])
+    charlie_xonly = bytes.fromhex(ACCOUNTS["Charlie"]["xonly_pubkey"])
     utxo_set.add_coinbase(GENESIS_TXID, [
         TxOutput(100_000, _p2pkh(alice_pk)),
         TxOutput(75_000,  _p2wpkh(bob_pk)),
         TxOutput(50_000,  _p2pkh(charlie_pk)),
+        TxOutput(60_000,  _p2tr_script(alice_xonly)),
+        TxOutput(45_000,  _p2tr_script(bob_xonly)),
+        TxOutput(30_000,  _p2tr_script(charlie_xonly)),
     ])
 
 _seed()
@@ -357,23 +390,36 @@ def api_create_multisig():
     if amount <= 0:
         return jsonify({"success": False, "error": "Amount must be positive"})
 
-    if script_type == "P2WSH":
+    if script_type == "P2TR-MuSig":
+        # MuSig n-of-n: aggregate all signers' x-only pubkeys into a single key
+        n_signers = len(signers)
+        xonly_pks = [bytes.fromhex(ACCOUNTS[s]["xonly_pubkey"]) for s in signers]
+        agg_xonly = aggregate_pubkeys(xonly_pks)
+        agg_hex   = agg_xonly.hex()
+        sp        = _p2tr_script(agg_xonly)
+        p2tr_musig_info[agg_hex] = {"m": n_signers, "n": n_signers, "signers": signers}
+        fake_txid = sha256(bytes.fromhex(agg_hex) + os.urandom(4))
+        desc      = f"{n_signers}-of-{n_signers} P2TR MuSig ({', '.join(signers)})"
+    elif script_type == "P2WSH":
         sp, ws_bytes = _p2wsh_multisig(m, signers)
-        sh_hex = sha256(ws_bytes).hex()
-        witness_scripts[sh_hex]     = ws_bytes
-        witness_script_info[sh_hex] = {"m": m, "n": len(signers), "signers": signers}
+        agg_hex = sha256(ws_bytes).hex()
+        witness_scripts[agg_hex]     = ws_bytes
+        witness_script_info[agg_hex] = {"m": m, "n": len(signers), "signers": signers}
+        fake_txid = sha256(bytes.fromhex(agg_hex) + os.urandom(4))
+        desc      = f"{m}-of-{len(signers)} {script_type} ({', '.join(signers)})"
     else:  # P2SH
         sp, rs_bytes = _p2sh_multisig(m, signers)
-        sh_hex = hash160(rs_bytes).hex()
-        redeem_scripts[sh_hex] = rs_bytes
-        multisig_info[sh_hex]  = {"m": m, "n": len(signers), "signers": signers}
+        agg_hex = hash160(rs_bytes).hex()
+        redeem_scripts[agg_hex] = rs_bytes
+        multisig_info[agg_hex]  = {"m": m, "n": len(signers), "signers": signers}
+        fake_txid = sha256(bytes.fromhex(agg_hex) + os.urandom(4))
+        desc      = f"{m}-of-{len(signers)} {script_type} ({', '.join(signers)})"
 
-    fake_txid = sha256(bytes.fromhex(sh_hex) + os.urandom(4))
     utxo_set.add_coinbase(fake_txid, [TxOutput(amount, sp)])
 
     return jsonify({
         "success":     True,
-        "description": f"{m}-of-{len(signers)} {script_type} ({', '.join(signers)})",
+        "description": desc,
         "amount":      amount,
     })
 
@@ -413,7 +459,7 @@ def api_transact():
                 return jsonify({"success": False,
                                 "error": f"Output {i}: amount must be positive"})
 
-            if script_type in ("P2SH", "P2WSH"):
+            if script_type in ("P2SH", "P2WSH", "P2TR-MuSig"):
                 # Multisig output
                 out_m       = int(out.get("m", 2))
                 out_signers = out.get("multisig_signers", [])
@@ -424,19 +470,38 @@ def api_transact():
                 if unknown:
                     return jsonify({"success": False,
                                     "error": f"Output {i}: unknown signers {unknown}"})
-                ms_meta = {"m": out_m, "n": len(out_signers), "signers": out_signers}
-                if script_type == "P2WSH":
+                if script_type == "P2TR-MuSig":
+                    # n-of-n MuSig: aggregate xonly pubkeys into one key
+                    n_out = len(out_signers)
+                    xonly_pks  = [bytes.fromhex(ACCOUNTS[s]["xonly_pubkey"]) for s in out_signers]
+                    agg_xonly  = aggregate_pubkeys(xonly_pks)
+                    agg_hex    = agg_xonly.hex()
+                    sp         = _p2tr_script(agg_xonly)
+                    ms_meta    = {"m": n_out, "n": n_out, "signers": out_signers}
+                    p2tr_musig_info[agg_hex] = ms_meta
+                elif script_type == "P2WSH":
+                    ms_meta = {"m": out_m, "n": len(out_signers), "signers": out_signers}
                     sp, ws_bytes = _p2wsh_multisig(out_m, out_signers)
                     sh_hex = sha256(ws_bytes).hex()
                     witness_scripts[sh_hex]     = ws_bytes
                     witness_script_info[sh_hex] = ms_meta
                 else:  # P2SH
+                    ms_meta = {"m": out_m, "n": len(out_signers), "signers": out_signers}
                     sp, rs_bytes = _p2sh_multisig(out_m, out_signers)
                     sh_hex = hash160(rs_bytes).hex()
                     redeem_scripts[sh_hex] = rs_bytes
                     multisig_info[sh_hex]  = ms_meta
                 tx_outputs.append(TxOutput(amount=amount, script_pubkey=sp))
                 tx_output_metas.append(ms_meta)
+            elif script_type == "P2TR":
+                recipient = out.get("recipient", "")
+                if recipient not in ACCOUNTS:
+                    return jsonify({"success": False,
+                                    "error": f"Output {i}: unknown recipient '{recipient}'"})
+                xonly  = bytes.fromhex(ACCOUNTS[recipient]["xonly_pubkey"])
+                script = _p2tr_script(xonly)
+                tx_outputs.append(TxOutput(amount=amount, script_pubkey=script))
+                tx_output_metas.append(None)
             else:
                 recipient = out.get("recipient", "")
                 if recipient not in ACCOUNTS:
@@ -504,15 +569,21 @@ def api_transact():
                 inp.witness = [sk.sign_digest(bip143_hash) + b"\x01", pubkey]
 
             elif stype == "P2TR":
-                owner = _owner(utxo.script_pubkey)
-                if owner not in ACCOUNTS:
-                    return jsonify({"success": False,
-                                    "error": f"Input {i}: cannot identify P2TR owner"})
-                sk       = SigningKey.from_string(
-                               ACCOUNTS[owner]["privkey_int"].to_bytes(32, "big"),
-                               curve=SECP256k1)
-                sh_hash  = tx.sighash(i, utxo.script_pubkey)
-                inp.witness = [sk.sign_digest(sh_hash) + b"\x01"]
+                agg_hex = utxo.script_pubkey.cmds[1].hex()
+                sh_hash = tx.sighash(i, utxo.script_pubkey)
+                if agg_hex in p2tr_musig_info:
+                    # MuSig n-of-n: combine all signers' keys and sign
+                    info     = p2tr_musig_info[agg_hex]
+                    privkeys = [ACCOUNTS[s]["privkey_int"] for s in info["signers"]]
+                    xonly_pks= [bytes.fromhex(ACCOUNTS[s]["xonly_pubkey"]) for s in info["signers"]]
+                    inp.witness = [sign_schnorr_musig(privkeys, xonly_pks, sh_hash)]
+                else:
+                    # Single-key P2TR
+                    owner = _owner(utxo.script_pubkey)
+                    if owner not in ACCOUNTS:
+                        return jsonify({"success": False,
+                                        "error": f"Input {i}: cannot identify P2TR owner"})
+                    inp.witness = [sign_schnorr(ACCOUNTS[owner]["privkey_int"], sh_hash)]
 
             else:   # P2PKH / legacy
                 owner = _owner(utxo.script_pubkey)
@@ -565,6 +636,13 @@ def api_transact():
                 info = witness_script_info.get(sh, {})
                 return (f"{info.get('m','?')}-of-{info.get('n','?')} P2WSH "
                         f"({', '.join(info.get('signers',[]))})")
+            if stype == "P2TR":
+                c       = u.script_pubkey.cmds
+                agg_hex = c[1].hex() if isinstance(c[1], bytes) else ""
+                info    = p2tr_musig_info.get(agg_hex)
+                if info:
+                    n = info["n"]
+                    return f"{n}-of-{n} P2TR MuSig ({', '.join(info['signers'])})"
             return _owner(u.script_pubkey)
 
         record = {
@@ -585,6 +663,7 @@ def api_transact():
             ],
             "outputs":       [_out_record(o, m) for o, m in zip(tx_outputs, tx_output_metas)],
             "inputs_replay": inputs_replay,
+            "raw_tx":        tx._serialize().hex(),  # legacy serialization for TXID / malleation demo
         }
         if ok:
             tx_history.append(record)
@@ -594,6 +673,83 @@ def api_transact():
         return jsonify({"success": False,
                         "error": str(e),
                         "traceback": traceback.format_exc()})
+
+
+@app.route("/api/malleate", methods=["POST"])
+def api_malleate():
+    """
+    Demonstrate ECDSA transaction malleability.
+
+    For P2PKH:  the ECDSA sig lives in scriptSig, which IS part of the legacy
+                serialization used to compute the TXID. Flipping s → n−s produces
+                a different TXID — the attack changes the transaction's identity.
+
+    For P2WPKH: the sig lives in the witness, which is NOT in the legacy serialization.
+                Flipping s → n−s leaves the TXID unchanged (SegWit's fix).
+    """
+    # secp256k1 group order (constant)
+    _N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+
+    body      = request.get_json(force=True)
+    txid      = body.get("txid", "")
+    input_idx = int(body.get("input_idx", 0))
+
+    record = next((r for r in tx_history if r.get("txid") == txid), None)
+    if not record:
+        return jsonify({"error": "Transaction not found in history"})
+
+    ri = record.get("inputs_replay", [])
+    if input_idx >= len(ri):
+        return jsonify({"error": f"Input index {input_idx} out of range"})
+
+    d     = ri[input_idx]
+    stype = d["script_type"]
+
+    if stype not in ("P2PKH", "P2WPKH"):
+        return jsonify({"error":
+            f"Malleation only applies to ECDSA-signed inputs (P2PKH / P2WPKH), not {stype}"})
+
+    # Locate the ECDSA sig: r(32) ‖ s(32) ‖ SIGHASH_ALL(0x01) = 65 bytes
+    sig_pool     = d["script_sig"] if stype == "P2PKH" else d["witness"]
+    orig_sig_hex = next(
+        (x for x in sig_pool
+         if len(bytes.fromhex(x)) == 65 and bytes.fromhex(x)[-1] == 0x01),
+        None
+    )
+    if not orig_sig_hex:
+        return jsonify({"error": "ECDSA signature not found in this input"})
+
+    orig_sig = bytes.fromhex(orig_sig_hex)
+    r        = int.from_bytes(orig_sig[:32],  "big")
+    s        = int.from_bytes(orig_sig[32:64], "big")
+    s_prime  = _N - s                        # the malleated s value
+
+    malleated_sig = r.to_bytes(32, "big") + s_prime.to_bytes(32, "big") + b"\x01"
+
+    raw_tx = bytes.fromhex(record.get("raw_tx", ""))
+    if not raw_tx:
+        return jsonify({"error": "Raw transaction not stored — reset and retry"})
+
+    if stype == "P2PKH":
+        # Sig is serialized inside scriptSig → inside the raw tx → affects TXID
+        if orig_sig not in raw_tx:
+            return jsonify({"error": "Could not locate signature bytes in raw transaction"})
+        malleated_raw  = raw_tx.replace(orig_sig, malleated_sig, 1)
+        malleated_txid = sha256(sha256(malleated_raw)).hex()
+    else:
+        # P2WPKH witness is segregated from the legacy serialization → TXID unchanged
+        malleated_txid = txid
+
+    return jsonify({
+        "script_type":    stype,
+        "orig_txid":      txid,
+        "malleated_txid": malleated_txid,
+        "txid_changed":   malleated_txid != txid,
+        "r":              r.to_bytes(32, "big").hex(),
+        "s":              s.to_bytes(32, "big").hex(),
+        "s_prime":        s_prime.to_bytes(32, "big").hex(),
+        "N_hex":          hex(_N),
+    })
 
 
 if __name__ == "__main__":

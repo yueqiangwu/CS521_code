@@ -249,7 +249,11 @@ class BitcoinScriptInterpreter:
             raise VMError("P2TR requires at least 1 witness item (signature)")
 
         sig = self.witness[0]
-        return verify_schnorr(pubkey, sig, self.tx_sig_hash)
+        result = verify_schnorr(pubkey, sig, self.tx_sig_hash)
+        self.push(VM_TRUE if result else VM_FALSE)
+        self.pc = len(self.script.cmds)
+        self.terminated = True
+        return result
 
 
     def _execute_p2sh(

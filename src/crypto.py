@@ -98,6 +98,59 @@ def aggregate_pubkeys(pubkeys: list[bytes]) -> bytes:
     return P_agg.x().to_bytes(32, "big")
 
 
+def sign_schnorr(privkey_int: int, msg: bytes) -> bytes:
+    """
+    BIP340 Schnorr signing. Returns 64-byte sig: R.x ‖ s.
+
+    If the public key P = d*G has odd y, d is negated (BIP340 even-y convention).
+    Nonce is deterministic: k = H_tag("BIP0340/nonce", d || P.x || msg).
+    """
+    n = generator_secp256k1.order()
+    G = generator_secp256k1
+    d = privkey_int
+    P = d * G
+    if P.y() % 2 != 0:  # enforce even-y public key
+        d = n - d
+        P = d * G
+    P_x = P.x().to_bytes(32, "big")
+    k_bytes = _tagged_hash("BIP0340/nonce", d.to_bytes(32, "big") + P_x + msg)
+    k = int.from_bytes(k_bytes, "big") % n
+    if k == 0:
+        raise ValueError("Nonce k is zero — use different msg")
+    R = k * G
+    if R.y() % 2 != 0:  # enforce even-y nonce point
+        k = n - k
+        R = k * G
+    R_x = R.x().to_bytes(32, "big")
+    e = int.from_bytes(_tagged_hash("BIP0340/challenge", R_x + P_x + msg), "big") % n
+    s = (k + e * d) % n
+    return R_x + s.to_bytes(32, "big")
+
+
+def sign_schnorr_musig(privkeys: list[int], xonly_pubkeys: list[bytes], msg: bytes) -> bytes:
+    """
+    Simplified MuSig n-of-n aggregate signing (educational).
+
+    Uses the same KeyAgg coefficients as aggregate_pubkeys() to combine all
+    signers' private keys into a single aggregate private key, then signs with
+    sign_schnorr().  In a real deployment the private keys would never be
+    combined — each signer would produce a partial Schnorr signature via the
+    MuSig2 interactive protocol.  Here all keys are held server-side, so we
+    can short-circuit to a single sign call for demonstration purposes.
+    """
+    n = generator_secp256k1.order()
+    G = generator_secp256k1
+    L = _tagged_hash("KeyAgg/list", b"".join(xonly_pubkeys))
+    d_agg = 0
+    for d, pk_bytes in zip(privkeys, xonly_pubkeys):
+        # _lift_x always uses even-y; negate d if d*G has odd y
+        P = d * G
+        d_eff = d if P.y() % 2 == 0 else n - d
+        a_i = int.from_bytes(_tagged_hash("KeyAgg/coeff", L + pk_bytes), "big") % n
+        d_agg = (d_agg + a_i * d_eff) % n
+    return sign_schnorr(d_agg, msg)
+
+
 def verify_schnorr(pubkey: bytes, sig: bytes, msg: bytes) -> bool:
     """
     BIP340 Schnorr signature verification.

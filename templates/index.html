@@ -121,6 +121,13 @@
       border-radius: 8px; padding: .5rem .8rem;
     }
     .phase-badge { font-size: .65rem; }
+
+    /* ── Malleation demo ── */
+    .sig-cell-orig    { color: #b91c1c; font-family: monospace; font-size: .72rem; }
+    .sig-cell-mal     { color: #15803d; font-family: monospace; font-size: .72rem; }
+    .sig-cell-same    { color: #64748b; font-family: monospace; font-size: .72rem; }
+    .txid-compare td  { padding: .25rem .4rem; font-size: .78rem; vertical-align: middle; }
+    .txid-compare code { font-size: .72rem; word-break: break-all; }
   </style>
 </head>
 <body>
@@ -152,10 +159,15 @@
           <select id="ms-script-type" class="form-select form-select-sm" onchange="updateMsN()">
             <option value="P2SH">P2SH (hash160, legacy)</option>
             <option value="P2WSH">P2WSH (sha256, native SegWit)</option>
+            <option value="P2TR-MuSig">P2TR MuSig (Schnorr, n-of-n)</option>
           </select>
+          <div id="ms-musig-note" class="small text-info mt-1" style="display:none">
+            ✦ MuSig requires <strong>all</strong> selected signers — no threshold M.
+            The aggregate key is <em>indistinguishable from a single key on the blockchain</em>.
+          </div>
         </div>
         <!-- Threshold -->
-        <div class="mb-3">
+        <div class="mb-3" id="ms-threshold-row">
           <label class="form-label fw-semibold">Threshold (M-of-N)</label>
           <div class="d-flex gap-2 align-items-center">
             <select id="ms-m" class="form-select form-select-sm" style="width:80px">
@@ -204,6 +216,21 @@
         <button class="btn btn-warning fw-semibold" onclick="createMultisig()">
           🔐 Create Multisig UTXO
         </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Transaction Malleability modal ────────────────────────────── -->
+<div class="modal fade" id="malleateModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header py-2">
+        <h6 class="modal-title fw-bold mb-0" id="malleate-title">🔨 Malleability Demo</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-3" id="malleate-body">
+        <div class="text-center text-muted py-4">Loading…</div>
       </div>
     </div>
   </div>
@@ -291,8 +318,10 @@
                     onchange="onOutTypeChange()">
               <option value="P2PKH">P2PKH</option>
               <option value="P2WPKH">P2WPKH</option>
+              <option value="P2TR">P2TR</option>
               <option value="P2SH">P2SH</option>
               <option value="P2WSH">P2WSH</option>
+              <option value="P2TR-MuSig">P2TR MuSig</option>
             </select>
           </div>
           <div class="col-2">
@@ -303,7 +332,7 @@
         <!-- P2SH / P2WSH multisig config (shown only for multisig types) -->
         <div id="out-ms-config" class="mb-1 p-2 rounded small"
              style="display:none; background:#f1f5f9; border:1px solid #e2e8f0">
-          <div class="d-flex align-items-center gap-2 mb-1 flex-wrap">
+          <div class="d-flex align-items-center gap-2 mb-1 flex-wrap" id="out-ms-threshold-row">
             <span class="text-muted fw-semibold">M:</span>
             <select id="out-ms-m" class="form-select form-select-sm" style="width:65px">
               <option value="1">1</option>
@@ -476,10 +505,12 @@ function renderSelectedInputs() {
 
 // ── Output type toggle ────────────────────────────────────────────────────
 function onOutTypeChange() {
-  const type   = document.getElementById("out-type").value;
-  const isMs   = type === "P2SH" || type === "P2WSH";
-  document.getElementById("out-recipient-wrap").style.display = isMs ? "none" : "";
-  document.getElementById("out-ms-config").style.display      = isMs ? ""     : "none";
+  const type     = document.getElementById("out-type").value;
+  const isMs     = type === "P2SH" || type === "P2WSH" || type === "P2TR-MuSig";
+  const isMusig  = type === "P2TR-MuSig";
+  document.getElementById("out-recipient-wrap").style.display   = isMs    ? "none" : "";
+  document.getElementById("out-ms-config").style.display        = isMs    ? ""     : "none";
+  document.getElementById("out-ms-threshold-row").style.display = isMusig ? "none" : "";
 }
 
 function onOutMsChange() {
@@ -498,11 +529,15 @@ function addOutput() {
   const stype = document.getElementById("out-type").value;
   if (!amt || amt <= 0) { flash("Enter a valid amount", "warning"); return; }
 
-  if (stype === "P2SH" || stype === "P2WSH") {
-    const m       = parseInt(document.getElementById("out-ms-m").value);
+  if (stype === "P2SH" || stype === "P2WSH" || stype === "P2TR-MuSig") {
     const signers = [...document.querySelectorAll(".out-ms-check:checked")].map(c => c.value);
+    const m       = stype === "P2TR-MuSig"
+                    ? signers.length
+                    : parseInt(document.getElementById("out-ms-m").value);
     if (signers.length < 2) { flash("Select ≥ 2 co-signers for multisig", "warning"); return; }
-    if (m < 1 || m > signers.length) { flash("Invalid threshold M", "warning"); return; }
+    if (stype !== "P2TR-MuSig" && (m < 1 || m > signers.length)) {
+      flash("Invalid threshold M", "warning"); return;
+    }
     outputs.push({ amount: amt, script_type: stype, m, multisig_signers: signers });
   } else {
     const rec = document.getElementById("out-recipient").value;
@@ -568,9 +603,11 @@ function updateSummary() {
     let changeLabel, changeMeta;
 
     if (firstInput.multisig) {
-      // Change goes back to the same M-of-N multisig (P2SH or P2WSH)
-      const ms    = firstInput.multisig;
-      const msType = firstInput.script_type || "P2SH";
+      // Change goes back to the same multisig (P2SH, P2WSH, or P2TR MuSig)
+      const ms     = firstInput.multisig;
+      // P2TR with multisig metadata → it's a MuSig UTXO
+      const msType = (firstInput.script_type === "P2TR") ? "P2TR-MuSig"
+                   : (firstInput.script_type || "P2SH");
       const bgs = ms.signers.map(s =>
         `<span class="badge bg-${OWNER_COLOR[s]||'secondary'} ms-1">${s}</span>`
       ).join("");
@@ -580,7 +617,8 @@ function updateSummary() {
       const sender = firstInput.owner || "Alice";
       const col    = OWNER_COLOR[sender] || "secondary";
       // Preserve the input's script type so change goes back in the same format
-      const stype  = (firstInput.script_type === "P2WPKH") ? "P2WPKH" : "P2PKH";
+      const stype  = ["P2WPKH", "P2TR"].includes(firstInput.script_type)
+                     ? firstInput.script_type : "P2PKH";
       changeLabel  = `<span class="badge bg-${col} ms-1">${sender}</span>`
                    + `<span class="badge bg-secondary ms-1">${stype}</span>`;
       changeMeta   = JSON.stringify({ type: "single", name: sender, script_type: stype });
@@ -605,7 +643,7 @@ function addChangeOutput() {
   const amount = parseInt(hint.dataset.amount, 10);
   if (!meta || !amount || amount <= 0) return;
 
-  if (meta.type === "P2SH" || meta.type === "P2WSH") {
+  if (meta.type === "P2SH" || meta.type === "P2WSH" || meta.type === "P2TR-MuSig") {
     outputs.push({ amount, script_type: meta.type, m: meta.m, multisig_signers: meta.signers });
   } else {
     // Preserve original script type (P2PKH or P2WPKH)
@@ -693,10 +731,17 @@ function renderHistory(hist) {
   }
   el.innerHTML = [...hist].reverse().map(tx => {
     const ins = tx.inputs.map((inp, idx) => {
-      const btn = `<button class="btn py-0 px-1 me-1" style="font-size:.8rem;line-height:1.3"
-                           onclick="openReplay('${tx.txid}',${idx})"
-                           title="Replay script execution">🔬</button>`;
-      return btn + `<span class="badge bg-${OWNER_COLOR[inp.owner]||"secondary"} me-1">${inp.owner} ${inp.amount?.toLocaleString()}</span>`;
+      const replayBtn = `<button class="btn py-0 px-1 me-1" style="font-size:.8rem;line-height:1.3"
+                                 onclick="openReplay('${tx.txid}',${idx})"
+                                 title="Replay script execution">🔬</button>`;
+      const malleateBtn = (inp.type === "P2PKH" || inp.type === "P2WPKH")
+        ? `<button class="btn py-0 px-1 me-1" style="font-size:.8rem;line-height:1.3"
+                   onclick="openMalleate('${tx.txid}',${idx})"
+                   title="Malleation attack demo">🔨</button>`
+        : "";
+      const col = OWNER_COLOR[inp.owner] || "secondary";
+      return malleateBtn + replayBtn
+           + `<span class="badge bg-${col} me-1">${inp.owner} ${inp.amount?.toLocaleString()}</span>`;
     }).join("");
     const outs = tx.outputs.map(o => {
       if (o.multisig) {
@@ -738,14 +783,19 @@ function flash(msg, type="info") {
 
 // ── P2SH Multisig creation ────────────────────────────────────────────────
 function updateMsN() {
-  const checked = [...document.querySelectorAll(".ms-signer-check:checked")].map(c => c.value);
-  const n = checked.length;
-  document.getElementById("ms-n-label").textContent = n;
+  const checked  = [...document.querySelectorAll(".ms-signer-check:checked")].map(c => c.value);
+  const n        = checked.length;
+  const stype    = document.getElementById("ms-script-type").value;
+  const isMusig  = stype === "P2TR-MuSig";
 
-  // Clamp M to [1, n]
+  document.getElementById("ms-n-label").textContent = n;
+  document.getElementById("ms-threshold-row").style.display = isMusig ? "none" : "";
+  document.getElementById("ms-musig-note").style.display    = isMusig ? ""     : "none";
+
+  // Clamp M to [1, n] (irrelevant for MuSig but keep DOM valid)
   const mSel = document.getElementById("ms-m");
-  const m    = parseInt(mSel.value);
-  mSel.innerHTML = Array.from({length: Math.max(n, 1)}, (_,i) =>
+  const m    = isMusig ? n : parseInt(mSel.value);
+  mSel.innerHTML = Array.from({length: Math.max(n, 1)}, (_, i) =>
     `<option value="${i+1}" ${i+1===Math.min(m,n)?'selected':''}>${i+1}</option>`
   ).join("");
 
@@ -754,10 +804,8 @@ function updateMsN() {
 
   const preview = document.getElementById("ms-preview");
   if (n >= 2) {
-    const curM = parseInt(mSel.value);
-    const stype = document.getElementById("ms-script-type").value;
-    document.getElementById("ms-preview-text").textContent =
-      `${curM}-of-${n} ${stype} (${checked.join(", ")})`;
+    const label = isMusig ? `${n}-of-${n} P2TR MuSig` : `${parseInt(mSel.value)}-of-${n} ${stype}`;
+    document.getElementById("ms-preview-text").textContent = `${label} (${checked.join(", ")})`;
     preview.style.display = "";
   } else {
     preview.style.display = "none";
@@ -766,9 +814,11 @@ function updateMsN() {
 
 async function createMultisig() {
   const signers     = [...document.querySelectorAll(".ms-signer-check:checked")].map(c => c.value);
-  const m           = parseInt(document.getElementById("ms-m").value);
-  const amount      = parseInt(document.getElementById("ms-amount").value);
   const script_type = document.getElementById("ms-script-type").value;
+  const m           = script_type === "P2TR-MuSig"
+                      ? signers.length   // n-of-n always
+                      : parseInt(document.getElementById("ms-m").value);
+  const amount      = parseInt(document.getElementById("ms-amount").value);
 
   if (signers.length < 2) {
     document.getElementById("ms-signer-error").style.display = "";
@@ -896,6 +946,142 @@ function renderReplayStep() {
         <button class="btn btn-sm btn-outline-secondary" onclick="replayIdx=replaySteps.length-1;renderReplayStep()" ${replayIdx===total-1?'disabled':''}>⏭</button>
       </div>
     </div>`;
+}
+
+// ── Malleation Demo ───────────────────────────────────────────────────────
+async function openMalleate(txid, inputIdx) {
+  const modal = new bootstrap.Modal(document.getElementById('malleateModal'));
+  document.getElementById('malleate-title').textContent = '🔨 Malleability Demo';
+  document.getElementById('malleate-body').innerHTML =
+    '<div class="text-center py-4 text-muted">⏳ Analyzing signature…</div>';
+  modal.show();
+
+  try {
+    const resp = await fetch('/api/malleate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({txid, input_idx: inputIdx}),
+    });
+    const data = await resp.json();
+    if (data.error) {
+      document.getElementById('malleate-body').innerHTML =
+        `<div class="alert alert-danger">${data.error}</div>`;
+      return;
+    }
+    renderMalleate(data);
+  } catch(e) {
+    document.getElementById('malleate-body').innerHTML =
+      `<div class="alert alert-danger">Network error: ${e.message}</div>`;
+  }
+}
+
+function renderMalleate(d) {
+  const isP2PKH = d.script_type === 'P2PKH';
+  const sh = hex => hex.slice(0,10) + '…' + hex.slice(-6);  // short hex
+
+  document.getElementById('malleate-title').textContent =
+    `🔨 Malleability Demo — ${d.script_type}`;
+
+  // TXID comparison block
+  const txidBlock = isP2PKH ? `
+    <div class="alert alert-danger py-2 px-3 mb-2">
+      <strong>⚠️ TXID changes!</strong>
+      The signature is inside <code>scriptSig</code>, which is part of the legacy
+      serialization used to compute the TXID.
+    </div>
+    <table class="txid-compare w-100 mb-1">
+      <tr>
+        <td class="text-muted" style="width:130px">Original TXID</td>
+        <td><code>${d.orig_txid}</code></td>
+      </tr>
+      <tr>
+        <td class="text-muted">Malleated TXID</td>
+        <td><code class="text-danger fw-semibold">${d.malleated_txid}</code>
+            <span class="badge bg-danger ms-1">different</span></td>
+      </tr>
+    </table>` : `
+    <div class="alert alert-success py-2 px-3 mb-2">
+      <strong>✅ TXID unchanged!</strong>
+      The signature is in the <em>witness</em>, which is
+      <strong>excluded</strong> from the legacy serialization (BIP141 SegWit).
+    </div>
+    <table class="txid-compare w-100 mb-1">
+      <tr>
+        <td class="text-muted" style="width:130px">Original TXID</td>
+        <td><code>${d.orig_txid}</code></td>
+      </tr>
+      <tr>
+        <td class="text-muted">Malleated TXID</td>
+        <td><code class="text-success fw-semibold">${d.malleated_txid}</code>
+            <span class="badge bg-success ms-1">identical</span></td>
+      </tr>
+    </table>`;
+
+  // Impact explanation
+  const impactBlock = isP2PKH ? `
+    <div class="rounded p-2 small mt-2" style="background:#fef2f2;border:1px solid #fca5a5">
+      <strong>Attack scenario:</strong> A third party intercepts the broadcast,
+      flips <code>s → n−s</code>, and re-broadcasts the modified transaction.
+      Both versions move the same coins to the same destination, but they have
+      <em>different TXIDs</em>. Any wallet or contract that tracks the payment
+      by the original TXID will think the payment is pending — even though the
+      coins already moved. This enabled the <strong>Mt. Gox exploit</strong> and
+      made payment channels unreliable before SegWit.
+    </div>` : `
+    <div class="rounded p-2 small mt-2" style="background:#f0fdf4;border:1px solid #86efac">
+      <strong>Why SegWit fixes it:</strong> By moving the signature into the
+      witness (segregated from the transaction body), the TXID is computed over
+      data that <em>cannot be altered without the private key</em>.
+      Lightning Network and other Layer-2 protocols rely on this guarantee to
+      safely pre-sign child transactions.
+    </div>`;
+
+  document.getElementById('malleate-body').innerHTML = `
+    <p class="text-muted small mb-3">
+      In ECDSA, if <code>(r, s)</code> is a valid signature over a message,
+      then <code>(r, n−s)</code> is <em>also valid</em> — both satisfy the
+      verification equation. An attacker can flip <strong>s → n−s</strong>
+      without knowing the private key.
+    </p>
+
+    <!-- Signature table -->
+    <div class="mb-3 p-2 rounded" style="background:#f8fafc;border:1px solid #e2e8f0">
+      <div class="small text-muted fw-semibold mb-2">ECDSA Signature: r ‖ s ‖ SIGHASH_ALL</div>
+      <table class="w-100 small">
+        <thead>
+          <tr>
+            <th style="width:60px" class="text-muted fw-normal pb-1"></th>
+            <th class="text-center fw-semibold pb-1">Original</th>
+            <th class="text-center fw-semibold pb-1">Malleated</th>
+            <th style="width:90px" class="text-center fw-semibold pb-1">Change</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="text-muted fw-semibold">r</td>
+            <td class="sig-cell-same text-center">${sh(d.r)}</td>
+            <td class="sig-cell-same text-center">${sh(d.r)}</td>
+            <td class="text-center"><span class="badge bg-secondary">unchanged</span></td>
+          </tr>
+          <tr>
+            <td class="text-muted fw-semibold">s</td>
+            <td class="sig-cell-orig text-center">${sh(d.s)}</td>
+            <td class="sig-cell-mal text-center">${sh(d.s_prime)}</td>
+            <td class="text-center"><span class="badge bg-warning text-dark">n − s</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="text-muted mt-2" style="font-size:.7rem">
+        secp256k1 order &nbsp;<code>n = ${d.N_hex.slice(2,12)}…</code>
+        &nbsp;|&nbsp; Formula: &nbsp;<code>s′ = n − s (mod n)</code>
+      </div>
+    </div>
+
+    <!-- TXID comparison -->
+    ${txidBlock}
+
+    <!-- Impact -->
+    ${impactBlock}`;
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────
