@@ -82,6 +82,45 @@
     }
     .hist-card .txid { font-family: monospace; color: #94a3b8; font-size: .7rem; }
 
+    /* ── Replay modal ── */
+    .instr-row {
+      display: flex; align-items: center; gap: .4rem;
+      padding: .18rem .4rem; border-radius: 4px;
+      font-family: monospace; font-size: .72rem; cursor: default;
+    }
+    .instr-row.executed { background: #eff6ff; border-left: 3px solid #3b82f6; }
+    .instr-row.next-up  { background: #fefce8; border-left: 3px solid #f59e0b; }
+    .instr-idx   { color: #94a3b8; min-width: 22px; text-align: right; }
+    .phase-chip  { font-size: .62rem; font-weight:700; padding: .08rem .35rem;
+                   border-radius: 3px; color: #fff; min-width: 72px; text-align: center; }
+    .phase-0 { background:#9ca3af; }
+    .phase-1 { background:#f59e0b; }
+    .phase-2 { background:#3b82f6; }
+    .phase-3 { background:#8b5cf6; }
+    .phase-4 { background:#14b8a6; }
+    .phase-5 { background:#22c55e; color:#fff; }
+    .stack-item {
+      display:flex; align-items:center; gap:.4rem; padding:.22rem .5rem;
+      border-radius:5px; background:#f8fafc; border:1px solid #e2e8f0;
+      font-family:monospace; font-size:.7rem; margin-bottom:.18rem;
+    }
+    .stack-item.top { border-color:#93c5fd; background:#eff6ff; }
+    .s-badge { padding:.06rem .35rem; border-radius:3px; font-size:.65rem;
+               font-weight:700; color:#fff; min-width:56px; text-align:center; }
+    .s-sig       { background:#1e1b4b; }
+    .s-pubkey    { background:#1d4ed8; }
+    .s-hash      { background:#92400e; }
+    .s-bool_true { background:#166534; }
+    .s-dummy     { background:#6b7280; }
+    .s-data,.s-other { background:#374151; }
+
+    /* ── Malleation modal ── */
+    .mal-sig-table td { padding:.22rem .4rem; font-size:.78rem; vertical-align:middle; }
+    .sig-orig { color:#dc2626; font-family:monospace; font-size:.72rem; }
+    .sig-mal  { color:#16a34a; font-family:monospace; font-size:.72rem; }
+    .sig-same { color:#64748b; font-family:monospace; font-size:.72rem; }
+    .txid-row td { padding:.2rem .4rem; font-size:.75rem; vertical-align:middle; }
+
     /* ── Misc ── */
     .arrow-col { color: #cbd5e1; font-size: 1.1rem; text-align: center; }
     .total-chip {
@@ -175,6 +214,36 @@
         <button class="btn btn-warning fw-semibold" onclick="createMultisig()">
           🔐 Create Multisig UTXO
         </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Script Replay modal ───────────────────────────────────────── -->
+<div class="modal fade" id="replayModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header py-2">
+        <h6 class="modal-title fw-bold mb-0" id="replay-title">🔬 Script Execution</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-3" id="replay-body">
+        <div class="text-center text-muted py-4">Loading…</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Malleation Demo modal ─────────────────────────────────────── -->
+<div class="modal fade" id="malleateModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header py-2">
+        <h6 class="modal-title fw-bold mb-0" id="malleate-title">🔨 Malleability Demo</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-3" id="malleate-body">
+        <div class="text-center text-muted py-4">Loading…</div>
       </div>
     </div>
   </div>
@@ -648,9 +717,21 @@ function renderHistory(hist) {
     return;
   }
   el.innerHTML = [...hist].reverse().map(tx => {
-    const ins  = tx.inputs.map(i =>
-      `<span class="badge bg-${OWNER_COLOR[i.owner]||"secondary"} me-1">${i.owner} ${i.amount?.toLocaleString()}</span>`
-    ).join("");
+    const ins = tx.inputs.map((inp, idx) => {
+      const replayable = ["P2PKH","P2WPKH","P2SH","P2WSH"].includes(inp.type);
+      const malleable  = ["P2PKH","P2WPKH"].includes(inp.type);
+      const btnStyle   = "font-size:.75rem;line-height:1.2;padding:0 .3rem";
+      const replayBtn  = replayable
+        ? `<button class="btn btn-sm py-0" style="${btnStyle}"
+                   onclick="openReplay('${tx.txid}',${idx})" title="Script replay">🔬</button>`
+        : "";
+      const malBtn = malleable
+        ? `<button class="btn btn-sm py-0" style="${btnStyle}"
+                   onclick="openMalleate('${tx.txid}',${idx})" title="Malleation demo">🔨</button>`
+        : "";
+      const col = OWNER_COLOR[inp.owner] || "secondary";
+      return `${replayBtn}${malBtn}<span class="badge bg-${col} me-1">${inp.owner} ${inp.amount?.toLocaleString()}</span>`;
+    }).join("");
     const outs = tx.outputs.map(o => {
       if (o.multisig) {
         const ms = o.multisig;
@@ -746,6 +827,232 @@ async function createMultisig() {
   } else {
     flash(`❌ ${result.error}`, "danger");
   }
+}
+
+// ── Script Replay ─────────────────────────────────────────────────────────
+const PHASE_LABEL = ["disabled","scriptSig","scriptPubKey","redeemScript","witnessScript","witnessArg"];
+const PHASE_DESC  = {
+  1: "unlocking data (scriptSig)",
+  2: "locking script (scriptPubKey)",
+  3: "redeem script (P2SH)",
+  4: "witness / inner script",
+  5: "witness argument",
+};
+let replayData  = null;
+let replayStep  = 0;
+let initPc      = 0;
+
+async function openReplay(txid, inputIdx) {
+  const modal = new bootstrap.Modal(document.getElementById('replayModal'));
+  document.getElementById('replay-title').textContent = '🔬 Script Execution';
+  document.getElementById('replay-body').innerHTML =
+    '<div class="text-center py-4 text-muted">⏳ Running script…</div>';
+  modal.show();
+
+  try {
+    const resp = await fetch('/api/replay', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({txid, input_idx: inputIdx}),
+    });
+    const data = await resp.json();
+    if (data.error) {
+      document.getElementById('replay-body').innerHTML =
+        `<div class="alert alert-danger">${data.error}</div>`; return;
+    }
+    replayData = data;
+    replayStep = 0;
+    initPc     = data.steps[0].pc;
+    document.getElementById('replay-title').textContent =
+      `🔬 Script Execution — ${data.script_type}`;
+    renderReplay();
+  } catch(e) {
+    document.getElementById('replay-body').innerHTML =
+      `<div class="alert alert-danger">Network error: ${e.message}</div>`;
+  }
+}
+
+function renderReplay() {
+  if (!replayData) return;
+  const { instructions, steps } = replayData;
+  const step   = steps[replayStep];
+  const total  = steps.length;
+  const pc     = step.pc;
+
+  // Build instruction rows
+  const instrHtml = instructions.map((instr, idx) => {
+    const isExecuted = idx < pc && idx >= initPc;
+    const isNext     = idx === pc && !step.is_terminated;
+    const cls = isExecuted ? 'executed' : (isNext ? 'next-up' : '');
+    const arrow = isNext ? '▶' : (isExecuted && idx === pc - 1 ? '✓' : ' ');
+    return `<div class="instr-row ${cls}">
+      <span class="text-muted me-1" style="font-size:.65rem">${arrow}</span>
+      <span class="instr-idx">${idx}</span>
+      <span class="phase-chip phase-${instr.phase}">${PHASE_LABEL[instr.phase]||''}</span>
+      <span>${instr.name}</span>
+    </div>`;
+  }).join('');
+
+  // Build stack rows
+  const stackHtml = !step.stack.length
+    ? '<div class="text-muted small fst-italic text-center py-2">(empty stack)</div>'
+    : [...step.stack].reverse().map((item, ri) => {
+        const isTop = ri === 0;
+        return `<div class="stack-item ${isTop ? 'top' : ''}">
+          <span class="text-muted" style="width:14px;font-size:.65rem;text-align:right">${step.stack.length-1-ri}</span>
+          <span class="s-badge s-${item.type}">${item.label}</span>
+          <span style="flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${item.short||item.hex||''}</span>
+          ${isTop ? '<span class="text-primary" style="font-size:.62rem">← top</span>' : ''}
+        </div>`;
+      }).join('');
+
+  // Final result badge
+  const resultHtml = step.is_terminated
+    ? `<div class="text-center mt-2">
+        <span class="badge px-3 py-2 ${step.is_valid ? 'bg-success' : 'bg-danger'}" style="font-size:.9rem">
+          ${step.is_valid ? '✅ VALID — UTXO unlocked' : '❌ INVALID'}
+        </span>
+        ${step.error ? `<div class="text-danger small mt-1">${step.error}</div>` : ''}
+       </div>` : '';
+
+  document.getElementById('replay-body').innerHTML = `
+    <div class="row g-2 mb-2">
+      <div class="col-7">
+        <div class="small text-muted fw-semibold mb-1">Instructions
+          <span class="badge bg-secondary ms-1" style="font-size:.6rem">step ${replayStep}/${total-1}</span>
+        </div>
+        <div style="max-height:260px;overflow-y:auto;border:1px solid #e2e8f0;border-radius:6px;padding:.3rem">
+          ${instrHtml}
+        </div>
+      </div>
+      <div class="col-5">
+        <div class="small text-muted fw-semibold mb-1">Stack (bottom→top ↑)</div>
+        <div style="min-height:80px">${stackHtml}</div>
+      </div>
+    </div>
+    ${resultHtml}
+    <div class="d-flex justify-content-between align-items-center mt-2 pt-2 border-top">
+      <div class="d-flex gap-1">
+        <button class="btn btn-sm btn-outline-secondary" onclick="replayStep=0;renderReplay()"
+          ${replayStep===0?'disabled':''}>⏮</button>
+        <button class="btn btn-sm btn-outline-secondary" onclick="replayStep--;renderReplay()"
+          ${replayStep===0?'disabled':''}>◀ Prev</button>
+      </div>
+      <span class="text-muted small">${replayStep+1} / ${total}</span>
+      <div class="d-flex gap-1">
+        <button class="btn btn-sm btn-outline-secondary" onclick="replayStep++;renderReplay()"
+          ${replayStep===total-1?'disabled':''}>Next ▶</button>
+        <button class="btn btn-sm btn-outline-secondary" onclick="replayStep=replayData.steps.length-1;renderReplay()"
+          ${replayStep===total-1?'disabled':''}>⏭</button>
+      </div>
+    </div>`;
+}
+
+// ── Malleation Demo ───────────────────────────────────────────────────────
+async function openMalleate(txid, inputIdx) {
+  const modal = new bootstrap.Modal(document.getElementById('malleateModal'));
+  document.getElementById('malleate-title').textContent = '🔨 Malleability Demo';
+  document.getElementById('malleate-body').innerHTML =
+    '<div class="text-center py-4 text-muted">⏳ Analyzing signature…</div>';
+  modal.show();
+
+  try {
+    const resp = await fetch('/api/malleate', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({txid, input_idx: inputIdx}),
+    });
+    const data = await resp.json();
+    if (data.error) {
+      document.getElementById('malleate-body').innerHTML =
+        `<div class="alert alert-danger">${data.error}</div>`; return;
+    }
+    renderMalleate(data);
+  } catch(e) {
+    document.getElementById('malleate-body').innerHTML =
+      `<div class="alert alert-danger">Network error: ${e.message}</div>`;
+  }
+}
+
+function renderMalleate(d) {
+  const isP2PKH = d.script_type === 'P2PKH';
+  const sh = hex => hex.slice(0,10) + '…' + hex.slice(-6);
+
+  document.getElementById('malleate-title').textContent =
+    `🔨 Malleability Demo — ${d.script_type}`;
+
+  const txidBlock = isP2PKH ? `
+    <div class="alert alert-danger py-2 px-3 mb-2 small">
+      <strong>⚠️ TXID changes!</strong>
+      The signature is in <code>scriptSig</code>, which is part of the serialization used to compute the TXID.
+    </div>
+    <table class="txid-row w-100 mb-1">
+      <tr><td class="text-muted" style="width:120px">Original TXID</td>
+          <td><code>${d.orig_txid}</code></td></tr>
+      <tr><td class="text-muted">Malleated TXID</td>
+          <td><code class="text-danger fw-semibold">${d.malleated_txid}</code>
+              <span class="badge bg-danger ms-1">different</span></td></tr>
+    </table>` : `
+    <div class="alert alert-success py-2 px-3 mb-2 small">
+      <strong>✅ TXID unchanged!</strong>
+      The signature is in the <em>witness</em>, which is <strong>excluded</strong>
+      from the TXID computation (BIP141 SegWit).
+    </div>
+    <table class="txid-row w-100 mb-1">
+      <tr><td class="text-muted" style="width:120px">Original TXID</td>
+          <td><code>${d.orig_txid}</code></td></tr>
+      <tr><td class="text-muted">Malleated TXID</td>
+          <td><code class="text-success fw-semibold">${d.malleated_txid}</code>
+              <span class="badge bg-success ms-1">identical</span></td></tr>
+    </table>`;
+
+  const impact = isP2PKH
+    ? `A third party can flip <strong>s → n−s</strong> and rebroadcast.
+       The coins move to the same destination but the TXID changes — any wallet or
+       contract tracking the original TXID thinks the payment is still pending
+       (the <strong>Mt. Gox exploit mechanism</strong>).`
+    : `Because the witness is segregated, the TXID is computed over data that
+       cannot be changed without the private key. Lightning Network and other
+       Layer-2 protocols rely on this guarantee to safely pre-sign child transactions.`;
+
+  document.getElementById('malleate-body').innerHTML = `
+    <p class="text-muted small mb-3">
+      In ECDSA, if <code>(r, s)</code> is a valid signature, so is <code>(r, n−s)</code>.
+      An attacker can flip <strong>s → n−s</strong> without knowing the private key.
+    </p>
+    <div class="p-2 rounded mb-3" style="background:#f8fafc;border:1px solid #e2e8f0">
+      <div class="small text-muted fw-semibold mb-1">Signature: r ‖ s ‖ SIGHASH_ALL</div>
+      <table class="mal-sig-table w-100">
+        <thead><tr>
+          <th style="width:40px"></th>
+          <th class="text-center small fw-semibold">Original</th>
+          <th class="text-center small fw-semibold">Malleated</th>
+          <th style="width:90px" class="text-center small fw-semibold">Change</th>
+        </tr></thead>
+        <tbody>
+          <tr>
+            <td class="fw-semibold small">r</td>
+            <td class="sig-same text-center">${sh(d.r)}</td>
+            <td class="sig-same text-center">${sh(d.r)}</td>
+            <td class="text-center"><span class="badge bg-secondary">unchanged</span></td>
+          </tr>
+          <tr>
+            <td class="fw-semibold small">s</td>
+            <td class="sig-orig text-center">${sh(d.s)}</td>
+            <td class="sig-mal  text-center">${sh(d.s_prime)}</td>
+            <td class="text-center"><span class="badge bg-warning text-dark">n − s</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="text-muted mt-1" style="font-size:.68rem">
+        secp256k1 order <code>n = ${d.N_hex.slice(2,12)}…</code>
+        &nbsp;|&nbsp; Formula: <code>s′ = n − s mod n</code>
+      </div>
+    </div>
+    ${txidBlock}
+    <div class="rounded p-2 small mt-2"
+         style="background:${isP2PKH?'#fef2f2;border:1px solid #fca5a5':'#f0fdf4;border:1px solid #86efac'}">
+      <strong>${isP2PKH ? '⚠️ P2PKH is vulnerable:' : '✅ P2WPKH is protected:'}</strong>
+      ${impact}
+    </div>`;
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────
