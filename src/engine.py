@@ -226,7 +226,7 @@ class BitcoinScriptInterpreter:
 
         # Execute the witness script in a new VM instance, with the args as the initial stack
         try:
-            inner_script = Script.parse(witness_script_bytes.hex())
+            inner_script = Script.parse_hex(witness_script_bytes.hex())
         except Exception as e:
             logging.error(f"P2WSH inner script parsing failed: {e}")
             return False
