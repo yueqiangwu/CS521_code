@@ -6,8 +6,11 @@ from ecdsa.ecdsa import generator_secp256k1
 
 from src.engine import BitcoinScriptInterpreter
 from src.script import Script
-from src.crypto import verify_schnorr, aggregate_pubkeys
+from src.crypto import (verify_schnorr, aggregate_pubkeys,
+                        sign_schnorr, taproot_tweak_privkey,
+                        taproot_tweak_pubkey, taproot_musig_sign)
 from src.transactions import p2tr
+from src.utxo import UTXOSet, TxInput, TxOutput, Transaction
 
 
 # ── BIP340 signing helper (test-only) ────────────────────────────────────
@@ -347,6 +350,261 @@ def test_p2tr_wrapper_multi_key_wrong_sig():
     result = p2tr(bad_sig, [pubkey1, pubkey2], DUMMY_MSG)
     logging.info(f"Validation Result: {result}")
     assert result is False
+
+
+# ── sign_schnorr tests (BIP340) ───────────────────────────────────────────
+
+def test_sign_schnorr_roundtrip():
+    """sign_schnorr produces a 64-byte sig that verify_schnorr accepts."""
+    G = generator_secp256k1
+    for d in [PRIVKEY_1, PRIVKEY_2, 3]:
+        P     = d * G
+        xonly = P.x().to_bytes(32, "big")
+        sig   = sign_schnorr(d, DUMMY_MSG)
+        assert len(sig) == 64, "Schnorr signature must be 64 bytes"
+        assert verify_schnorr(xonly, sig, DUMMY_MSG), f"Round-trip failed for privkey={d}"
+
+
+def test_sign_schnorr_deterministic():
+    """Same inputs always produce the same signature."""
+    sig1 = sign_schnorr(PRIVKEY_1, DUMMY_MSG)
+    sig2 = sign_schnorr(PRIVKEY_1, DUMMY_MSG)
+    assert sig1 == sig2
+
+
+def test_sign_schnorr_wrong_key_rejected():
+    """Signature from key-1 does not verify against key-2's pubkey."""
+    G      = generator_secp256k1
+    xonly2 = (PRIVKEY_2 * G).x().to_bytes(32, "big")
+    sig1   = sign_schnorr(PRIVKEY_1, DUMMY_MSG)
+    assert not verify_schnorr(xonly2, sig1, DUMMY_MSG)
+
+
+def test_sign_schnorr_wrong_msg_rejected():
+    """Signature committed to DUMMY_MSG does not verify against a different message."""
+    G     = generator_secp256k1
+    xonly = (PRIVKEY_1 * G).x().to_bytes(32, "big")
+    sig   = sign_schnorr(PRIVKEY_1, DUMMY_MSG)
+    assert not verify_schnorr(xonly, sig, b"\x00" * 32)
+
+
+# ── BIP341 key tweak tests ────────────────────────────────────────────────
+
+def test_taproot_tweak_consistency():
+    """taproot_tweak_privkey and taproot_tweak_pubkey return the same output key."""
+    G = generator_secp256k1
+    for d in [PRIVKEY_1, PRIVKEY_2, 3]:
+        xonly_internal          = (d * G).x().to_bytes(32, "big")
+        d_tw, xonly_from_priv   = taproot_tweak_privkey(d)
+        xonly_from_pub          = taproot_tweak_pubkey(xonly_internal)
+        assert xonly_from_priv == xonly_from_pub, \
+            "Both tweak functions must return the same output key"
+
+
+def test_taproot_tweak_changes_key():
+    """BIP341 tweak must change the public key (output key ≠ internal key)."""
+    G = generator_secp256k1
+    for d in [PRIVKEY_1, PRIVKEY_2]:
+        xonly_internal = (d * G).x().to_bytes(32, "big")
+        xonly_output   = taproot_tweak_pubkey(xonly_internal)
+        assert xonly_internal != xonly_output, "Taproot tweak must alter the key"
+
+
+def test_p2tr_tweaked_key_spend_valid():
+    """scriptPubKey uses tweaked output key; spending with tweaked privkey succeeds."""
+    d_tweaked, xonly_output = taproot_tweak_privkey(PRIVKEY_1)
+    sig = sign_schnorr(d_tweaked, DUMMY_MSG)
+
+    vm = BitcoinScriptInterpreter(
+        script=Script([0x51, xonly_output]),
+        witness=[sig],
+        tx_sig_hash=DUMMY_MSG,
+    )
+    assert vm.execute() is True, "Tweaked key-path spend must succeed"
+
+
+def test_p2tr_internal_key_rejected_against_tweaked_script():
+    """Signing with the un-tweaked internal key must NOT unlock a tweaked P2TR output."""
+    _, xonly_output = taproot_tweak_privkey(PRIVKEY_1)
+    sig_untweaked   = sign_schnorr(PRIVKEY_1, DUMMY_MSG)   # signed with INTERNAL key
+
+    vm = BitcoinScriptInterpreter(
+        script=Script([0x51, xonly_output]),
+        witness=[sig_untweaked],
+        tx_sig_hash=DUMMY_MSG,
+    )
+    assert vm.execute() is False, "Internal key signature must not unlock tweaked P2TR"
+
+
+def test_p2tr_different_tweak_rejected():
+    """Tweaked key from key-2 cannot spend a P2TR locked to key-1's tweaked key."""
+    _, xonly_output_1 = taproot_tweak_privkey(PRIVKEY_1)
+    d_tweaked_2, _   = taproot_tweak_privkey(PRIVKEY_2)
+    sig_wrong        = sign_schnorr(d_tweaked_2, DUMMY_MSG)
+
+    vm = BitcoinScriptInterpreter(
+        script=Script([0x51, xonly_output_1]),
+        witness=[sig_wrong],
+        tx_sig_hash=DUMMY_MSG,
+    )
+    assert vm.execute() is False, "Wrong tweaked key must be rejected"
+
+
+# ── BIP341 sighash_taproot tests ──────────────────────────────────────────
+
+def _simple_p2tr_tx(privkey: int, amount: int = 100_000):
+    """Build a minimal one-input one-output transaction for sighash testing."""
+    _, xonly_out = taproot_tweak_privkey(privkey)
+    sp_in  = Script([0x51, xonly_out])
+    sp_out = Script([0x51, b"\xcd" * 32])
+    tx     = Transaction(
+        inputs=[TxInput(txid=b"\xab" * 32, vout=0)],
+        outputs=[TxOutput(amount - 5_000, sp_out)],
+    )
+    return tx, sp_in, amount
+
+
+def test_sighash_taproot_length():
+    tx, sp_in, amount = _simple_p2tr_tx(PRIVKEY_1)
+    h = tx.sighash_taproot(0, [amount], [sp_in.serialize()])
+    assert len(h) == 32
+
+
+def test_sighash_taproot_deterministic():
+    tx, sp_in, amount = _simple_p2tr_tx(PRIVKEY_1)
+    h1 = tx.sighash_taproot(0, [amount], [sp_in.serialize()])
+    h2 = tx.sighash_taproot(0, [amount], [sp_in.serialize()])
+    assert h1 == h2
+
+
+def test_sighash_taproot_differs_from_legacy():
+    """BIP341 taproot sighash must differ from the legacy single-SHA256 sighash."""
+    tx, sp_in, amount = _simple_p2tr_tx(PRIVKEY_1)
+    tap = tx.sighash_taproot(0, [amount], [sp_in.serialize()])
+    leg = tx.sighash(0, sp_in)
+    assert tap != leg, "Taproot sighash must differ from legacy sighash"
+
+
+def test_sighash_taproot_amount_sensitive():
+    """Changing the input amount produces a different taproot sighash (hashAmounts)."""
+    tx, sp_in, amount = _simple_p2tr_tx(PRIVKEY_1)
+    h1 = tx.sighash_taproot(0, [amount],         [sp_in.serialize()])
+    h2 = tx.sighash_taproot(0, [amount + 1_000], [sp_in.serialize()])
+    assert h1 != h2, "Taproot sighash must commit to input amount"
+
+
+def test_sighash_taproot_scriptpubkey_sensitive():
+    """Changing the input's scriptPubKey produces a different taproot sighash."""
+    tx, sp_in, amount = _simple_p2tr_tx(PRIVKEY_1)
+    _, xonly2         = taproot_tweak_privkey(PRIVKEY_2)
+    sp_other          = Script([0x51, xonly2])
+    h1 = tx.sighash_taproot(0, [amount], [sp_in.serialize()])
+    h2 = tx.sighash_taproot(0, [amount], [sp_other.serialize()])
+    assert h1 != h2, "Taproot sighash must commit to input scriptPubKey"
+
+
+# ── UTXOSet end-to-end P2TR tests ─────────────────────────────────────────
+
+def test_utxo_p2tr_single_key_spend():
+    """Full UTXOSet round-trip: fund a BIP341-tweaked P2TR output and spend it."""
+    d_tweaked, xonly_out = taproot_tweak_privkey(PRIVKEY_1)
+    sp = Script([0x51, xonly_out])
+
+    utxo_set     = UTXOSet()
+    funding_txid = b"\x01" * 32
+    utxo_set.add_coinbase(funding_txid, [TxOutput(100_000, sp)])
+
+    dest = Script([0x51, b"\xdd" * 32])
+    tx   = Transaction(
+        inputs=[TxInput(txid=funding_txid, vout=0)],
+        outputs=[TxOutput(90_000, dest)],
+    )
+    tap_hash             = tx.sighash_taproot(0, [100_000], [sp.serialize()])
+    tx.inputs[0].witness = [sign_schnorr(d_tweaked, tap_hash)]
+
+    ok, msg = utxo_set.validate_and_apply(tx)
+    assert ok, f"P2TR single-key UTXOSet spend failed: {msg}"
+
+
+def test_utxo_p2tr_wrong_key_rejected():
+    """Spending a P2TR UTXO with the wrong tweaked key must be rejected."""
+    _, xonly_out_1 = taproot_tweak_privkey(PRIVKEY_1)
+    d_tweaked_2, _ = taproot_tweak_privkey(PRIVKEY_2)
+    sp             = Script([0x51, xonly_out_1])
+
+    utxo_set     = UTXOSet()
+    funding_txid = b"\x02" * 32
+    utxo_set.add_coinbase(funding_txid, [TxOutput(100_000, sp)])
+
+    dest = Script([0x51, b"\xee" * 32])
+    tx   = Transaction(
+        inputs=[TxInput(txid=funding_txid, vout=0)],
+        outputs=[TxOutput(90_000, dest)],
+    )
+    tap_hash             = tx.sighash_taproot(0, [100_000], [sp.serialize()])
+    tx.inputs[0].witness = [sign_schnorr(d_tweaked_2, tap_hash)]  # wrong signer
+
+    ok, _ = utxo_set.validate_and_apply(tx)
+    assert ok is False, "Wrong tweaked key must be rejected by UTXOSet"
+
+
+def test_utxo_p2tr_musig_spend():
+    """UTXOSet: P2TR MuSig (2-of-2) with BIP341 taproot tweak — valid spend."""
+    G      = generator_secp256k1
+    xonly1 = (PRIVKEY_1 * G).x().to_bytes(32, "big")
+    xonly2 = (PRIVKEY_2 * G).x().to_bytes(32, "big")
+
+    agg_xonly    = aggregate_pubkeys([xonly1, xonly2])
+    output_xonly = taproot_tweak_pubkey(agg_xonly)
+    sp           = Script([0x51, output_xonly])
+
+    utxo_set     = UTXOSet()
+    funding_txid = b"\x03" * 32
+    utxo_set.add_coinbase(funding_txid, [TxOutput(80_000, sp)])
+
+    dest = Script([0x51, b"\xff" * 32])
+    tx   = Transaction(
+        inputs=[TxInput(txid=funding_txid, vout=0)],
+        outputs=[TxOutput(70_000, dest)],
+    )
+    tap_hash = tx.sighash_taproot(0, [80_000], [sp.serialize()])
+    tx.inputs[0].witness = [taproot_musig_sign(
+        [PRIVKEY_1, PRIVKEY_2], [xonly1, xonly2], agg_xonly, tap_hash
+    )]
+
+    ok, msg = utxo_set.validate_and_apply(tx)
+    assert ok, f"P2TR MuSig UTXOSet spend failed: {msg}"
+
+
+def test_utxo_p2tr_musig_wrong_participant_rejected():
+    """P2TR MuSig: signing with a wrong participant's key must be rejected."""
+    G      = generator_secp256k1
+    xonly1 = (PRIVKEY_1 * G).x().to_bytes(32, "big")
+    xonly2 = (PRIVKEY_2 * G).x().to_bytes(32, "big")
+    xonly3 = (3 * G).x().to_bytes(32, "big")
+
+    agg_xonly    = aggregate_pubkeys([xonly1, xonly2])
+    output_xonly = taproot_tweak_pubkey(agg_xonly)
+    sp           = Script([0x51, output_xonly])
+
+    utxo_set     = UTXOSet()
+    funding_txid = b"\x04" * 32
+    utxo_set.add_coinbase(funding_txid, [TxOutput(80_000, sp)])
+
+    dest = Script([0x51, b"\xaa" * 32])
+    tx   = Transaction(
+        inputs=[TxInput(txid=funding_txid, vout=0)],
+        outputs=[TxOutput(70_000, dest)],
+    )
+    tap_hash = tx.sighash_taproot(0, [80_000], [sp.serialize()])
+    # Sign with key-1 + key-3 instead of key-1 + key-2
+    bad_sig = taproot_musig_sign(
+        [PRIVKEY_1, 3], [xonly1, xonly3], agg_xonly, tap_hash
+    )
+    tx.inputs[0].witness = [bad_sig]
+
+    ok, _ = utxo_set.validate_and_apply(tx)
+    assert ok is False, "Wrong MuSig participant must be rejected"
 
 
 if __name__ == "__main__":

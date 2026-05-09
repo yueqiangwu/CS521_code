@@ -170,6 +170,50 @@ class Transaction:
 
         return _sha256d(data)
 
+    def sighash_taproot(self, input_idx: int,
+                        amounts: list[int],
+                        script_pubkeys: list[bytes]) -> bytes:
+        """
+        BIP341 taproot key-path sighash (SIGHASH_ALL, hash_type = 0x00).
+
+        Unlike BIP143, this commits to ALL input amounts and scriptPubKeys
+        (preventing the "unknown input value" attack) and uses single SHA256
+        inside the tagged hash rather than double SHA256.
+        """
+        from crypto import _tagged_hash
+
+        def sha256(d): return hashlib.sha256(d).digest()
+
+        outpoints = b"".join(
+            inp.txid + inp.vout.to_bytes(4, "little") for inp in self.inputs
+        )
+        amounts_data  = b"".join(a.to_bytes(8, "little") for a in amounts)
+        spks_data     = b"".join(
+            _encode_varint(len(spk)) + spk for spk in script_pubkeys
+        )
+        sequences     = b"".join(
+            inp.sequence.to_bytes(4, "little") for inp in self.inputs
+        )
+        outputs_raw   = b""
+        for out in self.outputs:
+            sp = out.script_pubkey.serialize()
+            outputs_raw += out.amount.to_bytes(8, "little") + _encode_varint(len(sp)) + sp
+
+        data = (
+            b"\x00"                                   # epoch (always 0)
+            + b"\x00"                                 # hash_type: SIGHASH_ALL
+            + self.version.to_bytes(4, "little")
+            + self.locktime.to_bytes(4, "little")
+            + sha256(outpoints)                       # hashPrevouts
+            + sha256(amounts_data)                    # hashAmounts  (BIP341-only)
+            + sha256(spks_data)                       # hashScriptPubkeys (BIP341-only)
+            + sha256(sequences)                       # hashSequence
+            + sha256(outputs_raw)                     # hashOutputs
+            + b"\x00"                                 # spend_type: key path, no annex
+            + input_idx.to_bytes(4, "little")         # input_index
+        )
+        return _tagged_hash("TapSighash", data)
+
     def _serialize(self) -> bytes:
         """Full transaction serialization (used for txid computation)."""
         data = self.version.to_bytes(4, "little")
@@ -335,7 +379,18 @@ class UTXOSet:
 
         # 4. Script validation for each input
         for i, (inp, utxo) in enumerate(zip(tx.inputs, input_utxos)):
-            sig_hash = _compute_sighash(tx, i, inp, utxo)
+            cmds = utxo.script_pubkey.cmds
+            # P2TR (SegWit v1): use BIP341 taproot sighash, which commits to all
+            # input amounts and scriptPubKeys (needs the full input_utxos list)
+            if (len(cmds) == 2 and cmds[0] == 0x51
+                    and isinstance(cmds[1], bytes) and len(cmds[1]) == 32):
+                sig_hash = tx.sighash_taproot(
+                    i,
+                    [u.amount for u in input_utxos],
+                    [u.script_pubkey.serialize() for u in input_utxos],
+                )
+            else:
+                sig_hash = _compute_sighash(tx, i, inp, utxo)
             if not _execute_input(inp, utxo, sig_hash):
                 return False, f"input {i}: script validation failed"
 

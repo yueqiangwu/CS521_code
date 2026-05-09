@@ -117,6 +117,101 @@ def aggregate_pubkeys(pubkeys: list[bytes]) -> bytes:
     return P_agg.x().to_bytes(32, "big")
 
 
+def sign_schnorr(privkey_int: int, msg: bytes) -> bytes:
+    """
+    BIP340 Schnorr signing. Returns 64-byte sig: R.x ‖ s.
+
+    If P = d*G has odd y, d is negated (BIP340 even-y convention).
+    Nonce is deterministic: k = H_tag("BIP0340/nonce", d_eff || P.x || msg).
+    """
+    n = generator_secp256k1.order()
+    G = generator_secp256k1
+    d = privkey_int
+    P = d * G
+    if P.y() % 2 != 0:      # enforce even-y public key
+        d = n - d
+        P = d * G
+    P_x = P.x().to_bytes(32, "big")
+    k_bytes = _tagged_hash("BIP0340/nonce", d.to_bytes(32, "big") + P_x + msg)
+    k = int.from_bytes(k_bytes, "big") % n
+    if k == 0:
+        raise ValueError("Nonce k is zero — use different msg")
+    R = k * G
+    if R.y() % 2 != 0:      # enforce even-y nonce point
+        k = n - k
+        R = k * G
+    R_x = R.x().to_bytes(32, "big")
+    e = int.from_bytes(_tagged_hash("BIP0340/challenge", R_x + P_x + msg), "big") % n
+    s = (k + e * d) % n
+    return R_x + s.to_bytes(32, "big")
+
+
+def taproot_tweak_pubkey(xonly_internal: bytes) -> bytes:
+    """
+    BIP341: compute the tweaked output key from an internal x-only pubkey.
+
+    Q = lift_x(P_internal) + H_TapTweak(P_internal.x) · G
+    Returns Q.x (32 bytes) — goes in OP_1 <Q.x> scriptPubKey.
+    """
+    n = generator_secp256k1.order()
+    G = generator_secp256k1
+    coords = _lift_x(int.from_bytes(xonly_internal, "big"))
+    if coords is None:
+        raise ValueError(f"Invalid x-only pubkey: {xonly_internal.hex()}")
+    P = PointJacobi(curve_secp256k1, coords[0], coords[1], 1, n)
+    t = int.from_bytes(_tagged_hash("TapTweak", xonly_internal), "big") % n
+    Q = P + t * G
+    if Q == INFINITY:
+        raise ValueError("Tweaked key is point at infinity")
+    return Q.x().to_bytes(32, "big")
+
+
+def taproot_tweak_privkey(privkey_int: int) -> tuple[int, bytes]:
+    """
+    BIP341: compute tweaked private key and output x-only key for P2TR key-path.
+
+    d_eff   = d if P.y even else n-d     (BIP340 even-y convention)
+    d_tweaked = (d_eff + H_TapTweak(P.x)) mod n
+    Returns (d_tweaked, Q.x) — sign with d_tweaked, put Q.x in scriptPubKey.
+    """
+    n = generator_secp256k1.order()
+    G = generator_secp256k1
+    P = privkey_int * G
+    d = privkey_int if P.y() % 2 == 0 else n - privkey_int
+    P_x = P.x().to_bytes(32, "big")
+    t = int.from_bytes(_tagged_hash("TapTweak", P_x), "big") % n
+    d_tweaked = (d + t) % n
+    Q = d_tweaked * G
+    return d_tweaked, Q.x().to_bytes(32, "big")
+
+
+def taproot_musig_sign(privkeys: list[int], xonly_pubkeys: list[bytes],
+                       agg_xonly: bytes, msg: bytes) -> bytes:
+    """
+    MuSig n-of-n aggregate signing with BIP341 taproot key tweak.
+
+    1. Compute d_agg via KeyAgg coefficients (even-y adjusted for each signer).
+    2. Adjust d_agg for even-y convention of the aggregate key.
+    3. Apply BIP341 taproot tweak: d_tweaked = (d_agg + H_TapTweak(agg_xonly)) mod n.
+    4. Produce BIP340 Schnorr signature with d_tweaked.
+    """
+    n = generator_secp256k1.order()
+    G = generator_secp256k1
+    L = _tagged_hash("KeyAgg/list", b"".join(xonly_pubkeys))
+    d_agg = 0
+    for d, pk_bytes in zip(privkeys, xonly_pubkeys):
+        P = d * G
+        d_eff = d if P.y() % 2 == 0 else n - d
+        a_i = int.from_bytes(_tagged_hash("KeyAgg/coeff", L + pk_bytes), "big") % n
+        d_agg = (d_agg + a_i * d_eff) % n
+    P_agg = d_agg * G
+    if P_agg.y() % 2 != 0:   # enforce even-y aggregate key
+        d_agg = n - d_agg
+    t = int.from_bytes(_tagged_hash("TapTweak", agg_xonly), "big") % n
+    d_tweaked = (d_agg + t) % n
+    return sign_schnorr(d_tweaked, msg)
+
+
 def verify_schnorr(pubkey: bytes, sig: bytes, msg: bytes) -> bool:
     """
     BIP340 Schnorr signature verification.

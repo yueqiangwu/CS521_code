@@ -161,8 +161,13 @@
           <label class="form-label fw-semibold">Script Type</label>
           <select id="ms-script-type" class="form-select form-select-sm" onchange="updateMsN()">
             <option value="P2SH">P2SH (hash160, legacy)</option>
-            <option value="P2WSH">P2WSH (sha256, native SegWit)</option>
+            <option value="P2WSH">P2WSH (sha256, native SegWit v0)</option>
+            <option value="P2TR-MuSig">P2TR MuSig (Schnorr + Taproot, n-of-n)</option>
           </select>
+          <div id="ms-musig-note" class="small text-info mt-1" style="display:none">
+            ✦ MuSig requires <strong>all</strong> selected signers (n-of-n).
+            The aggregate key is <em>indistinguishable from a single-key P2TR</em> on-chain.
+          </div>
         </div>
         <!-- Threshold -->
         <div class="mb-3">
@@ -316,8 +321,10 @@
                     onchange="onOutTypeChange()">
               <option value="P2PKH">P2PKH</option>
               <option value="P2WPKH">P2WPKH</option>
+              <option value="P2TR">P2TR</option>
               <option value="P2SH">P2SH</option>
               <option value="P2WSH">P2WSH</option>
+              <option value="P2TR-MuSig">P2TR MuSig</option>
             </select>
           </div>
           <div class="col-2">
@@ -501,10 +508,14 @@ function renderSelectedInputs() {
 
 // ── Output type toggle ────────────────────────────────────────────────────
 function onOutTypeChange() {
-  const type   = document.getElementById("out-type").value;
-  const isMs   = type === "P2SH" || type === "P2WSH";
-  document.getElementById("out-recipient-wrap").style.display = isMs ? "none" : "";
-  document.getElementById("out-ms-config").style.display      = isMs ? ""     : "none";
+  const type    = document.getElementById("out-type").value;
+  const isMs    = type === "P2SH" || type === "P2WSH" || type === "P2TR-MuSig";
+  const isMusig = type === "P2TR-MuSig";
+  document.getElementById("out-recipient-wrap").style.display = isMs    ? "none" : "";
+  document.getElementById("out-ms-config").style.display      = isMs    ? ""     : "none";
+  // MuSig is always n-of-n — hide M threshold selector
+  const mRow = document.getElementById("out-ms-m")?.closest(".d-flex");
+  if (mRow) mRow.style.display = isMusig ? "none" : "";
 }
 
 function onOutMsChange() {
@@ -523,11 +534,14 @@ function addOutput() {
   const stype = document.getElementById("out-type").value;
   if (!amt || amt <= 0) { flash("Enter a valid amount", "warning"); return; }
 
-  if (stype === "P2SH" || stype === "P2WSH") {
-    const m       = parseInt(document.getElementById("out-ms-m").value);
+  if (stype === "P2SH" || stype === "P2WSH" || stype === "P2TR-MuSig") {
     const signers = [...document.querySelectorAll(".out-ms-check:checked")].map(c => c.value);
+    const m       = stype === "P2TR-MuSig" ? signers.length
+                    : parseInt(document.getElementById("out-ms-m").value);
     if (signers.length < 2) { flash("Select ≥ 2 co-signers for multisig", "warning"); return; }
-    if (m < 1 || m > signers.length) { flash("Invalid threshold M", "warning"); return; }
+    if (stype !== "P2TR-MuSig" && (m < 1 || m > signers.length)) {
+      flash("Invalid threshold M", "warning"); return;
+    }
     outputs.push({ amount: amt, script_type: stype, m, multisig_signers: signers });
   } else {
     const rec = document.getElementById("out-recipient").value;
@@ -593,9 +607,11 @@ function updateSummary() {
     let changeLabel, changeMeta;
 
     if (firstInput.multisig) {
-      // Change goes back to the same M-of-N multisig (P2SH or P2WSH)
-      const ms    = firstInput.multisig;
-      const msType = firstInput.script_type || "P2SH";
+      // Change goes back to the same multisig (P2SH, P2WSH, or P2TR MuSig)
+      const ms     = firstInput.multisig;
+      // P2TR with multisig = MuSig → must send as "P2TR-MuSig" to backend
+      const msType = firstInput.script_type === "P2TR" ? "P2TR-MuSig"
+                   : (firstInput.script_type || "P2SH");
       const bgs = ms.signers.map(s =>
         `<span class="badge bg-${OWNER_COLOR[s]||'secondary'} ms-1">${s}</span>`
       ).join("");
@@ -604,8 +620,9 @@ function updateSummary() {
     } else {
       const sender = firstInput.owner || "Alice";
       const col    = OWNER_COLOR[sender] || "secondary";
-      // Preserve the input's script type so change goes back in the same format
-      const stype  = (firstInput.script_type === "P2WPKH") ? "P2WPKH" : "P2PKH";
+      // Preserve input's script type: P2WPKH and P2TR keep their format, legacy falls back to P2PKH
+      const stype  = ["P2WPKH", "P2TR"].includes(firstInput.script_type)
+                     ? firstInput.script_type : "P2PKH";
       changeLabel  = `<span class="badge bg-${col} ms-1">${sender}</span>`
                    + `<span class="badge bg-secondary ms-1">${stype}</span>`;
       changeMeta   = JSON.stringify({ type: "single", name: sender, script_type: stype });
@@ -630,10 +647,10 @@ function addChangeOutput() {
   const amount = parseInt(hint.dataset.amount, 10);
   if (!meta || !amount || amount <= 0) return;
 
-  if (meta.type === "P2SH" || meta.type === "P2WSH") {
+  if (["P2SH", "P2WSH", "P2TR-MuSig"].includes(meta.type)) {
     outputs.push({ amount, script_type: meta.type, m: meta.m, multisig_signers: meta.signers });
   } else {
-    // Preserve original script type (P2PKH or P2WPKH)
+    // Preserve original script type (P2PKH / P2WPKH / P2TR)
     outputs.push({ recipient: meta.name, amount, script_type: meta.script_type || "P2PKH" });
   }
   renderOutputs();
@@ -718,7 +735,7 @@ function renderHistory(hist) {
   }
   el.innerHTML = [...hist].reverse().map(tx => {
     const ins = tx.inputs.map((inp, idx) => {
-      const replayable = ["P2PKH","P2WPKH","P2SH","P2WSH"].includes(inp.type);
+      const replayable = ["P2PKH","P2WPKH","P2SH","P2WSH","P2TR"].includes(inp.type);
       const malleable  = ["P2PKH","P2WPKH"].includes(inp.type);
       const btnStyle   = "font-size:.75rem;line-height:1.2;padding:0 .3rem";
       const replayBtn  = replayable
@@ -770,28 +787,32 @@ function flash(msg, type="info") {
     <button type="button" class="btn-close" data-bs-dismiss="alert"></button>${msg}</div>`;
 }
 
-// ── P2SH Multisig creation ────────────────────────────────────────────────
+// ── Multisig creation ─────────────────────────────────────────────────────
 function updateMsN() {
   const checked = [...document.querySelectorAll(".ms-signer-check:checked")].map(c => c.value);
-  const n = checked.length;
-  document.getElementById("ms-n-label").textContent = n;
+  const n       = checked.length;
+  const stype   = document.getElementById("ms-script-type").value;
+  const isMusig = stype === "P2TR-MuSig";
 
-  // Clamp M to [1, n]
+  document.getElementById("ms-n-label").textContent = n;
+  // Show/hide M threshold row and MuSig note
+  const thresholdRow = document.getElementById("ms-m").closest(".d-flex");
+  if (thresholdRow) thresholdRow.style.display = isMusig ? "none" : "";
+  const musigNote = document.getElementById("ms-musig-note");
+  if (musigNote) musigNote.style.display = isMusig ? "" : "none";
+
   const mSel = document.getElementById("ms-m");
-  const m    = parseInt(mSel.value);
-  mSel.innerHTML = Array.from({length: Math.max(n, 1)}, (_,i) =>
+  const m    = isMusig ? n : parseInt(mSel.value);
+  mSel.innerHTML = Array.from({length: Math.max(n, 1)}, (_, i) =>
     `<option value="${i+1}" ${i+1===Math.min(m,n)?'selected':''}>${i+1}</option>`
   ).join("");
 
-  const errEl = document.getElementById("ms-signer-error");
-  errEl.style.display = n < 2 ? "" : "none";
+  document.getElementById("ms-signer-error").style.display = n < 2 ? "" : "none";
 
   const preview = document.getElementById("ms-preview");
   if (n >= 2) {
-    const curM = parseInt(mSel.value);
-    const stype = document.getElementById("ms-script-type").value;
-    document.getElementById("ms-preview-text").textContent =
-      `${curM}-of-${n} ${stype} (${checked.join(", ")})`;
+    const label = isMusig ? `${n}-of-${n} P2TR MuSig` : `${parseInt(mSel.value)}-of-${n} ${stype}`;
+    document.getElementById("ms-preview-text").textContent = `${label} (${checked.join(", ")})`;
     preview.style.display = "";
   } else {
     preview.style.display = "none";
@@ -800,9 +821,10 @@ function updateMsN() {
 
 async function createMultisig() {
   const signers     = [...document.querySelectorAll(".ms-signer-check:checked")].map(c => c.value);
-  const m           = parseInt(document.getElementById("ms-m").value);
-  const amount      = parseInt(document.getElementById("ms-amount").value);
   const script_type = document.getElementById("ms-script-type").value;
+  const m           = script_type === "P2TR-MuSig" ? signers.length
+                      : parseInt(document.getElementById("ms-m").value);
+  const amount      = parseInt(document.getElementById("ms-amount").value);
 
   if (signers.length < 2) {
     document.getElementById("ms-signer-error").style.display = "";
@@ -859,12 +881,16 @@ async function openReplay(txid, inputIdx) {
       document.getElementById('replay-body').innerHTML =
         `<div class="alert alert-danger">${data.error}</div>`; return;
     }
-    replayData = data;
-    replayStep = 0;
-    initPc     = data.steps[0].pc;
     document.getElementById('replay-title').textContent =
       `🔬 Script Execution — ${data.script_type}`;
-    renderReplay();
+    if (data.kind === 'p2tr') {
+      renderP2trReplay(data);
+    } else {
+      replayData = data;
+      replayStep = 0;
+      initPc     = data.steps[0].pc;
+      renderReplay();
+    }
   } catch(e) {
     document.getElementById('replay-body').innerHTML =
       `<div class="alert alert-danger">Network error: ${e.message}</div>`;
@@ -945,6 +971,96 @@ function renderReplay() {
           ${replayStep===total-1?'disabled':''}>⏭</button>
       </div>
     </div>`;
+}
+
+// ── P2TR Replay ───────────────────────────────────────────────────────────
+function renderP2trReplay(d) {
+  const sh = hex => hex.slice(0,10) + '…' + hex.slice(-6);
+
+  const validBadge = d.valid
+    ? `<span class="badge bg-success px-3 py-2" style="font-size:.95rem">✅ verify_schnorr = TRUE — UTXO unlocked</span>`
+    : `<span class="badge bg-danger  px-3 py-2" style="font-size:.95rem">❌ verify_schnorr = FALSE — UTXO rejected</span>`;
+
+  document.getElementById('replay-body').innerHTML = `
+    <div class="alert alert-secondary py-2 small mb-3">
+      P2TR key-path spend (BIP341) — no opcode execution.
+      The entire unlocking is a <strong>single BIP340 Schnorr verification</strong>
+      against the BIP341 taproot sighash.
+    </div>
+
+    <!-- scriptPubKey breakdown -->
+    <div class="mb-3">
+      <div class="small text-muted fw-semibold mb-1">scriptPubKey
+        <span class="badge bg-secondary ms-1">locking script</span></div>
+      <div class="p-2 rounded font-monospace small" style="background:#f8fafc;border:1px solid #e2e8f0">
+        <span class="badge bg-secondary me-2">OP_1</span>
+        <span class="badge phase-chip phase-2 me-1">tweaked output key</span>
+        <code>${sh(d.tweaked_key)}</code>
+        <div class="text-muted mt-1" style="font-size:.68rem">
+          P_output = lift_x(P_internal) + H_TapTweak(P_internal.x) · G &nbsp;(BIP341 key tweak)
+        </div>
+      </div>
+    </div>
+
+    <!-- Witness -->
+    <div class="mb-3">
+      <div class="small text-muted fw-semibold mb-1">Witness
+        <span class="badge bg-secondary ms-1">unlocking data</span></div>
+      <div class="p-2 rounded" style="background:#f8fafc;border:1px solid #e2e8f0">
+        <div class="d-flex align-items-center gap-2 mb-1">
+          <span class="badge bg-secondary">witness[0]</span>
+          <span class="badge phase-chip phase-4">Schnorr sig</span>
+          <code class="font-monospace small">${sh(d.sig)} (64 bytes)</code>
+        </div>
+        <div class="ms-2">
+          <table class="small w-100">
+            <tr>
+              <td class="text-muted pe-2" style="width:40px">R.x</td>
+              <td><code class="font-monospace">${sh(d.sig_r)}</code></td>
+              <td class="text-muted ps-2" style="font-size:.68rem">nonce point x-coordinate</td>
+            </tr>
+            <tr>
+              <td class="text-muted pe-2">s</td>
+              <td><code class="font-monospace">${sh(d.sig_s)}</code></td>
+              <td class="text-muted ps-2" style="font-size:.68rem">s = k + e·d  (mod n)</td>
+            </tr>
+          </table>
+          <div class="text-muted mt-1" style="font-size:.68rem">
+            ✦ No DER encoding · No sighash_type byte appended · 64 bytes only (BIP340)
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sighash -->
+    <div class="mb-3">
+      <div class="small text-muted fw-semibold mb-1">BIP341 Taproot Sighash
+        <span class="badge bg-warning text-dark ms-1">message being signed</span></div>
+      <div class="p-2 rounded" style="background:#fefce8;border:1px solid #fde047">
+        <code class="font-monospace small">${sh(d.sighash)}</code>
+        <div class="text-muted mt-1" style="font-size:.68rem">
+          = H_TapSighash(0x00 ‖ hash_type ‖ version ‖ locktime
+          ‖ hashPrevouts ‖ <strong>hashAmounts</strong> ‖ <strong>hashScriptPubkeys</strong>
+          ‖ hashSequence ‖ hashOutputs ‖ spend_type ‖ input_index)
+        </div>
+        <div class="text-muted" style="font-size:.65rem">
+          Bold fields are BIP341-only — not present in BIP143 (SegWit v0).
+          They prevent hardware wallets from being tricked about input amounts.
+        </div>
+      </div>
+    </div>
+
+    <!-- Verification equation -->
+    <div class="mb-3">
+      <div class="small text-muted fw-semibold mb-1">Schnorr Verification (BIP340)</div>
+      <div class="p-2 rounded font-monospace small" style="background:#f8fafc;border:1px solid #e2e8f0">
+        e = H_challenge(R.x ‖ pubkey ‖ sighash)
+        <br>R' = s·G − e·P_output
+        <br>valid ⟺ R'.y is even  ∧  R'.x = R.x
+      </div>
+    </div>
+
+    <div class="text-center">${validBadge}</div>`;
 }
 
 // ── Malleation Demo ───────────────────────────────────────────────────────
