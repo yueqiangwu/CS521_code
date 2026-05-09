@@ -4,6 +4,8 @@
 
 Group Members: Chenxin Yan & Yueqiang Wu
 
+Project Webpage: https://cs-521-final-frontend.vercel.app/visualizer
+
 Presentation: Bitcoin's scripting language: design philosophy (intentionally not Turing complete), standard transaction types (P2PKH, P2SH, P2WPKH, P2WSH, multisig), Taproot/Schnorr upgrades, and security properties.
 
 Coding project: Build a Bitcoin Script interpreter that parses and executes standard scripts on a stack machine. Demonstrate correct validation of multiple transaction types.
