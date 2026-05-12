@@ -109,7 +109,7 @@ CS521_code/
 │   └── test_utxo.py       # 14 tests
 ├── web_app.py             # Main Flask server (UTXO visualizer + script interpreter APIs)
 ├── requirements.txt       # Python dependencies
-└──Procfile               # Deployment (gunicorn web_app:app)
+└── Procfile               # Deployment (gunicorn web_app:app)
 ```
 
 ---
